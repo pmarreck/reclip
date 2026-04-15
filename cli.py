@@ -17,6 +17,59 @@ cfg = load_config()
 cache = Cache(cfg["cache_dir"], cfg["cache_max_mb"])
 
 
+def _format_duration(seconds):
+    if not seconds:
+        return "Unknown"
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _fetch_and_cache_metadata(url):
+    meta = cache.read_meta(url)
+    if meta.get("title"):
+        return meta
+    cmd = ["yt-dlp", "--no-playlist", "-j", url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    info = json.loads(line)
+                    meta = {
+                        "title": info.get("title", "Unknown"),
+                        "uploader": info.get("uploader", info.get("channel", "Unknown")),
+                        "upload_date": info.get("upload_date", "Unknown"),
+                        "duration": info.get("duration", 0),
+                        "url": url,
+                    }
+                    cache._write_meta(url, meta)
+                    return meta
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    return {"title": "Unknown", "uploader": "Unknown", "upload_date": "Unknown", "duration": 0, "url": url}
+
+
+def _metadata_header(url):
+    meta = _fetch_and_cache_metadata(url)
+    return (
+        f"=== Video Metadata ===\n"
+        f"Title: {meta.get('title', 'Unknown')}\n"
+        f"Channel: {meta.get('uploader', 'Unknown')}\n"
+        f"Upload Date: {meta.get('upload_date', 'Unknown')}\n"
+        f"Duration: {_format_duration(meta.get('duration'))}\n"
+        f"URL: {meta.get('url', url)}\n"
+        f"=== Transcript ===\n\n"
+    )
+
+
 def _ensure_audio(url):
     """Ensure audio.mp3 exists in cache. Downloads via yt-dlp if needed."""
     if cache.has_file(url, "audio.mp3"):
@@ -63,8 +116,9 @@ def _ensure_transcript(url):
         api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
     )
     text = result["text"]
-    cache.write_text(url, "transcript.txt", text)
-    return text
+    full = _metadata_header(url) + text
+    cache.write_text(url, "transcript.txt", full)
+    return full
 
 
 def _ensure_summary(url):

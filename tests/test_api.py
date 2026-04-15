@@ -122,7 +122,8 @@ class TestTranscribeEndpoint:
             "https://youtube.com/watch?v=uncached1",
             "transcript.txt",
         )
-        assert cached == "Transcribed text"
+        assert "Transcribed text" in cached
+        assert "=== Video Metadata ===" in cached
 
 
 class TestSummarizeEndpoint:

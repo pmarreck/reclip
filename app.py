@@ -43,10 +43,68 @@ def _is_loopback(req):
     return addr in ("127.0.0.1", "::1", "localhost")
 
 
+def _format_duration(seconds):
+    """Format seconds into H:MM:SS or M:SS."""
+    if not seconds:
+        return "Unknown"
+    seconds = int(seconds)
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _fetch_and_cache_metadata(url):
+    """Fetch video metadata via yt-dlp and cache it. Returns the metadata dict."""
+    meta = cache.read_meta(url)
+    if meta.get("title"):
+        return meta
+    cmd = ["yt-dlp", "--no-playlist", "-j", url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    info = json.loads(line)
+                    meta = {
+                        "title": info.get("title", "Unknown"),
+                        "uploader": info.get("uploader", info.get("channel", "Unknown")),
+                        "upload_date": info.get("upload_date", "Unknown"),
+                        "duration": info.get("duration", 0),
+                        "url": url,
+                    }
+                    cache._write_meta(url, meta)
+                    return meta
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    return {"title": "Unknown", "uploader": "Unknown", "upload_date": "Unknown", "duration": 0, "url": url}
+
+
+def _metadata_header(url):
+    """Build a metadata header string for prepending to transcripts."""
+    meta = _fetch_and_cache_metadata(url)
+    return (
+        f"=== Video Metadata ===\n"
+        f"Title: {meta.get('title', 'Unknown')}\n"
+        f"Channel: {meta.get('uploader', 'Unknown')}\n"
+        f"Upload Date: {meta.get('upload_date', 'Unknown')}\n"
+        f"Duration: {_format_duration(meta.get('duration'))}\n"
+        f"URL: {meta.get('url', url)}\n"
+        f"=== Transcript ===\n\n"
+    )
+
+
 def _ensure_audio(url):
     """Ensure audio.mp3 exists in cache. Downloads via yt-dlp if needed."""
     if cache.has_file(url, "audio.mp3"):
         return cache.entry_path(url, "audio.mp3")
+    # Fetch metadata before downloading (cheap, and useful later)
+    _fetch_and_cache_metadata(url)
     # Download using yt-dlp with audio extraction
     cmd = [
         "yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
@@ -66,6 +124,13 @@ def _ensure_audio(url):
     if not os.path.isfile(audio_path):
         raise RuntimeError("Audio download completed but no file found")
     return audio_path
+
+
+def _save_transcript(url, raw_text):
+    """Prepend metadata header and cache the transcript. Returns full text."""
+    full = _metadata_header(url) + raw_text
+    cache.write_text(url, "transcript.txt", full)
+    return full
 
 
 def _translate_filename(source, language):
@@ -88,8 +153,7 @@ def _run_summarize_sync(url):
             prompt=cfg["stt_prompt"],
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
-        transcript = result["text"]
-        cache.write_text(url, "transcript.txt", transcript)
+        transcript = _save_transcript(url, result["text"])
     summary = chat_completion(
         url=cfg["summarize_url"],
         model=cfg["summarize_model"],
@@ -198,8 +262,7 @@ def _run_transcribe(job_id, url):
             prompt=cfg["stt_prompt"],
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
-        transcript = result["text"]
-        cache.write_text(url, "transcript.txt", transcript)
+        transcript = _save_transcript(url, result["text"])
         job["status"] = "done"
         job["text"] = transcript
         job["filename"] = "transcript.txt"
@@ -263,8 +326,7 @@ def _run_translate(job_id, url, language, source):
                     prompt=cfg["stt_prompt"],
                     api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
                 )
-                source_text = result["text"]
-                cache.write_text(url, "transcript.txt", source_text)
+                source_text = _save_transcript(url, result["text"])
 
         if source_text is None:
             raise RuntimeError(f"Could not obtain {source} text")
