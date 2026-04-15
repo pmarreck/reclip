@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+cd "$(dirname "$0")"
+if command -v nix >/dev/null 2>&1; then
+	exec nix develop -c python app.py "$@"
+else
+	exec python app.py "$@"
+fi
