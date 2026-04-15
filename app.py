@@ -151,6 +151,30 @@ def run_download(job_id, url, format_choice, format_id):
             job["filename"] = f"{safe_title}{ext}" if safe_title else os.path.basename(chosen)
         else:
             job["filename"] = os.path.basename(chosen)
+
+        # Cache the downloaded file (best-effort — failures must not break the download)
+        try:
+            if format_choice == "audio":
+                cache.write_file(url, "audio.mp3", chosen)
+            else:
+                cache.write_file(url, "video.mp4", chosen)
+                # Also extract and cache audio for future transcription use
+                audio_cache_path = cache.entry_path(url, "audio.mp3")
+                if not os.path.isfile(audio_cache_path):
+                    extract_cmd = [
+                        "ffmpeg", "-i", chosen,
+                        "-vn", "-acodec", "libmp3lame", "-q:a", "2",
+                        audio_cache_path, "-y",
+                    ]
+                    subprocess.run(extract_cmd, capture_output=True, timeout=120)
+            import time as _time
+            cache._write_meta(url, {
+                "url": url,
+                "title": job.get("title", ""),
+                "fetched_at": _time.time(),
+            })
+        except Exception:
+            pass  # Cache failure must not break the download
     except subprocess.TimeoutExpired:
         job["status"] = "error"
         job["error"] = "Download timed out (5 min limit)"

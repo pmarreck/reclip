@@ -356,6 +356,131 @@ class TestTextDownload:
         assert resp.status_code == 404
 
 
+class TestDownloadCaching:
+    """Verify that run_download caches files and metadata after a successful download."""
+
+    def _make_mock_run(self, job_id, download_dir, format_choice="video"):
+        """Return a mock subprocess.run that creates a fake downloaded file."""
+        def mock_run(cmd, *args, **kwargs):
+            # If this is an ffmpeg audio extraction call, create a fake audio file
+            if cmd[0] == "ffmpeg":
+                audio_out = cmd[-2]  # second-to-last arg is the output path
+                os.makedirs(os.path.dirname(audio_out), exist_ok=True)
+                with open(audio_out, "wb") as f:
+                    f.write(b"fake extracted audio")
+                class FakeResult:
+                    returncode = 0
+                    stdout = ""
+                    stderr = ""
+                return FakeResult()
+
+            # yt-dlp download call — create the downloaded file
+            ext = "mp3" if format_choice == "audio" else "mp4"
+            fake_file = os.path.join(download_dir, f"{job_id}.{ext}")
+            with open(fake_file, "wb") as f:
+                f.write(b"fake media content")
+
+            class FakeResult:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return FakeResult()
+
+        return mock_run
+
+    def test_video_download_caches_video_file(self, client, tmp_cache, monkeypatch, tmp_path):
+        import app
+
+        url = "https://youtube.com/watch?v=cachevideo1"
+        job_id = "cachevid001"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Test Video"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR))
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert app.cache.has_file(url, "video.mp4"), "video.mp4 should be cached after video download"
+
+    def test_video_download_also_extracts_audio(self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cachevideo2"
+        job_id = "cachevid002"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Test Video 2"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR))
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert app.cache.has_file(url, "audio.mp3"), "audio.mp3 should be extracted and cached after video download"
+
+    def test_audio_download_caches_audio_file(self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cacheaudio1"
+        job_id = "cacheaud001"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Test Audio"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR, format_choice="audio"))
+
+        app.run_download(job_id, url, "audio", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert app.cache.has_file(url, "audio.mp3"), "audio.mp3 should be cached after audio download"
+
+    def test_audio_download_does_not_cache_video(self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cacheaudio2"
+        job_id = "cacheaud002"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Test Audio 2"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR, format_choice="audio"))
+
+        app.run_download(job_id, url, "audio", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert not app.cache.has_file(url, "video.mp4"), "video.mp4 should NOT be cached for audio-only download"
+
+    def test_video_download_writes_meta_json(self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cachemeta1"
+        job_id = "cachemeta01"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Meta Test"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR))
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        meta = app.cache.read_meta(url)
+        assert meta.get("url") == url, "meta.json should record the URL"
+        assert "fetched_at" in meta, "meta.json should record fetched_at timestamp"
+
+    def test_cache_failure_does_not_break_download(self, client, tmp_cache, monkeypatch):
+        """Cache errors must be swallowed — the download itself must still succeed."""
+        import app
+
+        url = "https://youtube.com/watch?v=cachefail1"
+        job_id = "cachefail01"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Fail Test"}
+
+        monkeypatch.setattr(subprocess, "run", self._make_mock_run(job_id, app.DOWNLOAD_DIR))
+
+        # Make write_file raise to simulate cache failure
+        def bad_write_file(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(app.cache, "write_file", bad_write_file)
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done", "Download should succeed even if cache write fails"
+
+
 class TestIsLoopback:
     def test_loopback_ipv4(self, client):
         """Requests from test client should be considered loopback."""
