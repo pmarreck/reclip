@@ -5,7 +5,8 @@ import glob
 import json
 import subprocess
 import threading
-from flask import Flask, request, jsonify, send_file, render_template
+import time
+from flask import Flask, request, jsonify, send_file, render_template, Response
 
 from config import load_config
 from cache import Cache
@@ -407,6 +408,35 @@ def check_status(job_id):
         "type": job.get("type", "media"),
         "text": job.get("text"),
     })
+
+
+@app.route("/api/stream/<job_id>")
+def stream_status(job_id):
+    """SSE endpoint — holds connection open until job completes."""
+    def generate():
+        last_status = None
+        while True:
+            job = jobs.get(job_id)
+            if not job:
+                yield f"data: {json.dumps({'error': 'Job not found'})}\n\n"
+                return
+            status = job["status"]
+            if status != last_status:
+                last_status = status
+                payload = {
+                    "status": status,
+                    "type": job.get("type", "media"),
+                    "error": job.get("error"),
+                    "filename": job.get("filename"),
+                    "text": job.get("text"),
+                }
+                yield f"data: {json.dumps(payload)}\n\n"
+                if status in ("done", "error"):
+                    return
+            time.sleep(1)
+
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/file/<job_id>")

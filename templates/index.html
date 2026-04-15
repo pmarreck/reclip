@@ -768,33 +768,40 @@
 
     function pollCard(idx) {
       const c = cardData[idx];
-      let delay = 1000;
-      const maxDelay = 30000;
-      function tick() {
-        fetch(`/api/status/${c.jobId}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.status === 'done') {
-              c.status = 'done';
-              c.filename = data.filename;
-              renderCard(idx);
-              saveCard(idx);
-            } else if (data.status === 'error') {
-              c.status = 'error';
-              c.error = data.error;
-              renderCard(idx);
-            } else {
-              delay = Math.min(delay * 1.5, maxDelay);
-              setTimeout(tick, delay);
-            }
-          })
-          .catch(() => {
-            c.status = 'error';
-            c.error = 'Lost connection to server';
+      if (typeof EventSource !== 'undefined') {
+        const es = new EventSource(`/api/stream/${c.jobId}`);
+        es.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          if (data.status === 'done') {
+            es.close();
+            c.status = 'done';
+            c.filename = data.filename;
             renderCard(idx);
-          });
+            saveCard(idx);
+          } else if (data.status === 'error' || data.error) {
+            es.close();
+            c.status = 'error';
+            c.error = data.error;
+            renderCard(idx);
+          }
+        };
+        es.onerror = () => {
+          es.close();
+          c.status = 'error';
+          c.error = 'Lost connection to server';
+          renderCard(idx);
+        };
+      } else {
+        _pollFallback(`/api/status/${c.jobId}`, 1000, (data) => {
+          if (data.status === 'done') {
+            c.status = 'done'; c.filename = data.filename;
+            renderCard(idx); saveCard(idx); return true;
+          } else if (data.status === 'error') {
+            c.status = 'error'; c.error = data.error;
+            renderCard(idx); return true;
+          }
+        }, () => { c.status = 'error'; c.error = 'Lost connection'; renderCard(idx); });
       }
-      setTimeout(tick, delay);
     }
 
     function saveCard(idx) {
@@ -928,27 +935,44 @@
 
     function pollOp(idx, opKey, jobId) {
       const c = cardData[idx];
-      let delay = 2000;
-      const maxDelay = 30000;
-      function tick() {
-        fetch(`/api/status/${jobId}`)
-          .then(res => res.json())
-          .then(data => {
-            if (data.status === 'done') {
-              c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
-              renderCard(idx);
-            } else if (data.status === 'error') {
-              c.ops[opKey] = { status: 'error', error: data.error };
-              renderCard(idx);
-            } else {
-              delay = Math.min(delay * 1.5, maxDelay);
-              setTimeout(tick, delay);
-            }
-          })
-          .catch(() => {
-            c.ops[opKey] = { status: 'error', error: 'Lost connection' };
+      if (typeof EventSource !== 'undefined') {
+        const es = new EventSource(`/api/stream/${jobId}`);
+        es.onmessage = (e) => {
+          const data = JSON.parse(e.data);
+          if (data.status === 'done') {
+            es.close();
+            c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
             renderCard(idx);
-          });
+          } else if (data.status === 'error' || data.error) {
+            es.close();
+            c.ops[opKey] = { status: 'error', error: data.error };
+            renderCard(idx);
+          }
+        };
+        es.onerror = () => {
+          es.close();
+          c.ops[opKey] = { status: 'error', error: 'Lost connection' };
+          renderCard(idx);
+        };
+      } else {
+        _pollFallback(`/api/status/${jobId}`, 2000, (data) => {
+          if (data.status === 'done') {
+            c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
+            renderCard(idx); return true;
+          } else if (data.status === 'error') {
+            c.ops[opKey] = { status: 'error', error: data.error };
+            renderCard(idx); return true;
+          }
+        }, () => { c.ops[opKey] = { status: 'error', error: 'Lost connection' }; renderCard(idx); });
+      }
+    }
+
+    function _pollFallback(url, startDelay, onData, onError) {
+      let delay = startDelay;
+      function tick() {
+        fetch(url).then(r => r.json()).then(data => {
+          if (!onData(data)) { delay = Math.min(delay * 1.5, 30000); setTimeout(tick, delay); }
+        }).catch(onError);
       }
       setTimeout(tick, delay);
     }

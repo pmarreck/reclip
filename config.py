@@ -29,19 +29,22 @@ def _default_cache_dir():
 
 
 def load_config():
+	# Common API key fallback — set once, used by all backends unless overridden
+	common_key = os.environ.get("RECLIP_API_KEY", "")
+
 	return {
 		"cache_dir": os.environ.get("RECLIP_CACHE_DIR", _default_cache_dir()),
 		"cache_max_mb": int(os.environ.get("RECLIP_CACHE_MAX_MB", "1024")),
 		"stt_url": os.environ.get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
-		"stt_api_key": os.environ.get("RECLIP_STT_API_KEY", ""),
+		"stt_api_key": os.environ.get("RECLIP_STT_API_KEY", common_key),
 		"stt_model": os.environ.get("RECLIP_STT_MODEL", "whisper-large-v3-turbo-8bit"),
 		"stt_prompt": os.environ.get("RECLIP_STT_PROMPT", ""),
 		"summarize_url": os.environ.get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions"),
-		"summarize_api_key": os.environ.get("RECLIP_SUMMARIZE_API_KEY", ""),
+		"summarize_api_key": os.environ.get("RECLIP_SUMMARIZE_API_KEY", common_key),
 		"summarize_model": os.environ.get("RECLIP_SUMMARIZE_MODEL", "gemma4-heretical-mlx-8bit"),
 		"summarize_prompt": os.environ.get("RECLIP_SUMMARIZE_PROMPT", DEFAULT_SUMMARIZE_PROMPT),
 		"translate_url": os.environ.get("RECLIP_TRANSLATE_URL", "http://localhost:8000/v1/chat/completions"),
-		"translate_api_key": os.environ.get("RECLIP_TRANSLATE_API_KEY", ""),
+		"translate_api_key": os.environ.get("RECLIP_TRANSLATE_API_KEY", common_key),
 		"translate_model": os.environ.get("RECLIP_TRANSLATE_MODEL", "gemma4-heretical-mlx-8bit"),
 		"translate_prompt": os.environ.get("RECLIP_TRANSLATE_PROMPT", DEFAULT_TRANSLATE_PROMPT),
 	}
