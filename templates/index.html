@@ -262,6 +262,13 @@
     .card-dl-btn.done { background: var(--success); color: #fff; }
     .card-dl-btn.error { background: var(--error); color: #fff; }
 
+    .card-btn-alt {
+      background: transparent;
+      color: var(--fg);
+      border: 1.5px solid var(--card-border);
+    }
+    .card-btn-alt:hover { background: rgba(26,26,24,0.04); border-color: var(--fg); }
+
     .card-status {
       font-size: 0.68rem;
       color: var(--muted);
@@ -582,7 +589,11 @@
 
       let actionHtml = '';
       if (c.status === 'ready') {
-        actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>${qualityChips}`;
+        actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>
+          <button class="card-dl-btn card-btn-alt" onclick="transcribeCard(${idx})">Transcribe</button>
+          <button class="card-dl-btn card-btn-alt" onclick="summarizeCard(${idx})">Summarize</button>
+          <button class="card-dl-btn card-btn-alt" onclick="toggleTranslate(${idx})">Translate</button>
+          ${qualityChips}`;
       } else if (c.status === 'downloading') {
         actionHtml = `<span class="card-status downloading"><span class="spin"></span> Downloading...</span>`;
       } else if (c.status === 'done') {
@@ -593,12 +604,41 @@
           <span class="card-status error">${esc(friendlyError(c.error || 'Download failed'))}</span>`;
       }
 
+      // Per-operation status indicators
+      let opsHtml = '';
+      for (const op of ['transcribe', 'summarize', 'translate_transcript', 'translate_summary']) {
+        const opState = c.ops?.[op];
+        if (!opState) continue;
+        const label = op.replace(/_/g, ' ');
+        if (opState.status === 'processing') {
+          opsHtml += `<div class="card-status downloading"><span class="spin"></span> ${label}...</div>`;
+        } else if (opState.status === 'done') {
+          opsHtml += `<button class="card-dl-btn done" onclick="saveText(${idx}, '${op}')">${label} — Save</button>`;
+        } else if (opState.status === 'error') {
+          opsHtml += `<span class="card-status error">${label}: ${esc(opState.error || 'Failed')}</span>`;
+        }
+      }
+
+      let translateHtml = '';
+      if (c.showTranslate) {
+        translateHtml = `
+          <div class="translate-panel" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <input type="text" class="translate-lang" id="lang-${idx}" value="${esc(c.translateLang || 'English')}"
+              placeholder="Language" style="padding:5px 10px;border:1.5px solid var(--card-border);border-radius:7px;
+              font-family:'DM Mono',monospace;font-size:0.7rem;width:110px;background:var(--card);color:var(--fg);">
+            <button class="card-dl-btn card-btn-alt" onclick="translateCard(${idx}, 'transcript')">Translate Transcript</button>
+            <button class="card-dl-btn card-btn-alt" onclick="translateCard(${idx}, 'summary')">Translate Summary</button>
+          </div>`;
+      }
+
       el.innerHTML = `
         <div class="card-thumb">${thumbHtml}</div>
         <div class="card-body">
           <div class="card-title">${esc(c.title || 'Untitled')}</div>
           <div class="card-meta">${esc(c.uploader)}${c.duration ? ' · ' + fmtDur(c.duration) : ''}</div>
           <div class="card-actions">${actionHtml}</div>
+          ${translateHtml}
+          <div class="card-ops" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">${opsHtml}</div>
         </div>
       `;
     }
@@ -699,6 +739,159 @@
       }
 
       if (btn) { btn.disabled = false; btn.textContent = 'Download All'; }
+    }
+
+    function toggleTranslate(idx) {
+      cardData[idx].showTranslate = !cardData[idx].showTranslate;
+      if (!cardData[idx].translateLang) cardData[idx].translateLang = 'English';
+      renderCard(idx);
+    }
+
+    function _initOps(idx) {
+      if (!cardData[idx].ops) cardData[idx].ops = {};
+    }
+
+    async function transcribeCard(idx) {
+      const c = cardData[idx];
+      _initOps(idx);
+      c.ops.transcribe = { status: 'processing' };
+      renderCard(idx);
+
+      try {
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, title: c.title || '' }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          c.ops.transcribe = { status: 'error', error: data.error };
+          renderCard(idx);
+          return;
+        }
+        if (data.cached) {
+          c.ops.transcribe = { status: 'done', text: data.text, jobId: null };
+          renderCard(idx);
+          return;
+        }
+        c.ops.transcribe.jobId = data.job_id;
+        pollOp(idx, 'transcribe', data.job_id);
+      } catch (err) {
+        c.ops.transcribe = { status: 'error', error: err.message };
+        renderCard(idx);
+      }
+    }
+
+    async function summarizeCard(idx) {
+      const c = cardData[idx];
+      _initOps(idx);
+      c.ops.summarize = { status: 'processing' };
+      renderCard(idx);
+
+      try {
+        const res = await fetch('/api/summarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, title: c.title || '' }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          c.ops.summarize = { status: 'error', error: data.error };
+          renderCard(idx);
+          return;
+        }
+        if (data.cached) {
+          c.ops.summarize = { status: 'done', text: data.text, jobId: null };
+          renderCard(idx);
+          return;
+        }
+        c.ops.summarize.jobId = data.job_id;
+        pollOp(idx, 'summarize', data.job_id);
+      } catch (err) {
+        c.ops.summarize = { status: 'error', error: err.message };
+        renderCard(idx);
+      }
+    }
+
+    async function translateCard(idx, source) {
+      const c = cardData[idx];
+      const langInput = document.getElementById(`lang-${idx}`);
+      const language = langInput ? langInput.value.trim() : 'English';
+      c.translateLang = language;
+      _initOps(idx);
+      const opKey = source === 'summary' ? 'translate_summary' : 'translate_transcript';
+      c.ops[opKey] = { status: 'processing' };
+      renderCard(idx);
+
+      try {
+        const res = await fetch('/api/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, title: c.title || '', language, source }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          c.ops[opKey] = { status: 'error', error: data.error };
+          renderCard(idx);
+          return;
+        }
+        if (data.cached) {
+          c.ops[opKey] = { status: 'done', text: data.text, jobId: null };
+          renderCard(idx);
+          return;
+        }
+        c.ops[opKey].jobId = data.job_id;
+        pollOp(idx, opKey, data.job_id);
+      } catch (err) {
+        c.ops[opKey] = { status: 'error', error: err.message };
+        renderCard(idx);
+      }
+    }
+
+    function pollOp(idx, opKey, jobId) {
+      const c = cardData[idx];
+      const iv = setInterval(async () => {
+        try {
+          const res = await fetch(`/api/status/${jobId}`);
+          const data = await res.json();
+          if (data.status === 'done') {
+            clearInterval(iv);
+            c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
+            renderCard(idx);
+          } else if (data.status === 'error') {
+            clearInterval(iv);
+            c.ops[opKey] = { status: 'error', error: data.error };
+            renderCard(idx);
+          }
+        } catch {
+          clearInterval(iv);
+          c.ops[opKey] = { status: 'error', error: 'Lost connection' };
+          renderCard(idx);
+        }
+      }, 2000);
+    }
+
+    function saveText(idx, opKey) {
+      const c = cardData[idx];
+      const op = c.ops?.[opKey];
+      if (!op) return;
+
+      if (op.text) {
+        const blob = new Blob([op.text], { type: 'text/plain' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = op.filename || `${opKey}.txt`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        return;
+      }
+
+      if (op.jobId) {
+        const a = document.createElement('a');
+        a.href = `/api/text/${op.jobId}`;
+        a.download = op.filename || `${opKey}.txt`;
+        a.click();
+      }
     }
   </script>
 </body>
