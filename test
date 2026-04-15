@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")"
+exec nix develop -c python -m pytest tests/ -v "$@"
