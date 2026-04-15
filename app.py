@@ -404,6 +404,28 @@ def cache_stats():
     return jsonify(cache.stats())
 
 
+@app.route("/api/config")
+def get_config():
+    if not _is_loopback(request):
+        return jsonify({}), 403
+
+    from urllib.parse import urlparse
+    stats = cache.stats()
+    stt_parsed = urlparse(cfg["stt_url"])
+    llm_parsed = urlparse(cfg["summarize_url"])
+
+    return jsonify({
+        "cache": {
+            "location": stats["location"],
+            "used_mb": stats["used_mb"],
+            "max_mb": stats["max_mb"],
+            "entry_count": stats["entry_count"],
+        },
+        "stt_host": f"{stt_parsed.hostname}:{stt_parsed.port}",
+        "llm_host": f"{llm_parsed.hostname}:{llm_parsed.port}",
+    })
+
+
 @app.route("/api/playlist", methods=["POST"])
 def playlist():
     data = request.json

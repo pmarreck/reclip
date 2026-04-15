@@ -415,6 +415,8 @@
 
     <div id="cards" class="cards"></div>
 
+    <div class="footer" id="configFooter"></div>
+
     <div class="footer">
       YouTube &middot; TikTok &middot; Instagram &middot; Twitter/X &middot; Reddit &middot; Facebook<br>
       Vimeo &middot; Twitch &middot; Dailymotion &middot; SoundCloud &middot; Loom &middot; Streamable<br>
@@ -965,6 +967,17 @@
         a.click();
       }
     }
+
+    (async function loadConfigFooter() {
+      try {
+        const res = await fetch('/api/config');
+        if (res.status !== 200) return;
+        const data = await res.json();
+        if (!data.cache) return;
+        const el = document.getElementById('configFooter');
+        el.textContent = `Cache: ${data.cache.location} (${data.cache.used_mb} MB / ${data.cache.max_mb} MB, ${data.cache.entry_count} entries)  \u2022  STT: ${data.stt_host}  \u2022  LLM: ${data.llm_host}`;
+      } catch {}
+    })();
   </script>
 </body>
 </html>

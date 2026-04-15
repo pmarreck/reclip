@@ -487,3 +487,13 @@ class TestIsLoopback:
         # The test client simulates 127.0.0.1
         import app
         assert app._is_loopback is not None  # function exists
+
+
+class TestConfigFooter:
+    def test_config_returns_info_for_loopback(self, client):
+        resp = client.get("/api/config")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert "cache" in data
+        assert "stt_host" in data
+        assert "llm_host" in data
