@@ -326,6 +326,14 @@
       margin-top: 4px;
     }
 
+    .playlist-header {
+      padding: 14px;
+      border: 1.5px solid var(--card-border);
+      border-radius: var(--radius);
+      background: var(--card);
+      margin-bottom: 10px;
+    }
+
     /* Download all bar */
     .dl-all-bar {
       display: flex;
@@ -487,6 +495,13 @@
 
       for (let i = 0; i < urls.length; i++) {
         const url = urls[i];
+
+        // Check if it's a playlist URL
+        if (url.includes('playlist?list=') || url.includes('/sets/') || url.includes('&list=')) {
+          await loadPlaylist(url, container);
+          continue;
+        }
+
         const idx = cardData.length;
         cardData.push({ url, status: 'loading' });
         renderCard(idx);
@@ -652,6 +667,63 @@
       bar.className = 'dl-all-bar';
       bar.innerHTML = `<button class="dl-all-btn" onclick="dlAll()">Download All</button>`;
       document.getElementById('cards').appendChild(bar);
+    }
+
+    async function loadPlaylist(url, container) {
+      const headerEl = document.createElement('div');
+      headerEl.className = 'playlist-header';
+      headerEl.innerHTML = '<span class="card-status downloading"><span class="spin"></span> Loading playlist...</span>';
+      container.appendChild(headerEl);
+
+      try {
+        const res = await fetch('/api/playlist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          headerEl.innerHTML = `<span class="card-status error">Playlist error: ${esc(data.error)}</span>`;
+          return;
+        }
+
+        const entries = data.entries || [];
+        headerEl.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <span style="font-family:'Instrument Serif',serif;font-size:1.1rem;">Playlist — ${entries.length} videos</span>
+            <div style="display:flex;gap:6px;">
+              <button class="card-dl-btn" onclick="batchOp('download')">Download All</button>
+              <button class="card-dl-btn card-btn-alt" onclick="batchOp('transcribe')">Transcribe All</button>
+              <button class="card-dl-btn card-btn-alt" onclick="batchOp('summarize')">Summarize All</button>
+            </div>
+          </div>`;
+
+        for (const entry of entries) {
+          const idx = cardData.length;
+          cardData.push({
+            url: entry.url,
+            status: 'ready',
+            title: entry.title || '',
+            thumbnail: entry.thumbnail || '',
+            duration: entry.duration,
+            uploader: '',
+            formats: [],
+            selectedFormatId: null,
+          });
+          renderCard(idx);
+        }
+      } catch (err) {
+        headerEl.innerHTML = `<span class="card-status error">${esc(err.message)}</span>`;
+      }
+    }
+
+    async function batchOp(op) {
+      for (let i = 0; i < cardData.length; i++) {
+        if (cardData[i].status !== 'ready') continue;
+        if (op === 'download') await dlCard(i);
+        else if (op === 'transcribe') await transcribeCard(i);
+        else if (op === 'summarize') await summarizeCard(i);
+      }
     }
 
     function pickFormat(idx, formatId) {
