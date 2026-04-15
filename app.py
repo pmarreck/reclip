@@ -300,7 +300,25 @@ def get_info():
         if result.returncode != 0:
             return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
 
-        info = parse_ytdlp_json(result.stdout)
+        # yt-dlp may return multiple JSON objects (one per line) for multi-video pages
+        entries = []
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+        if not entries:
+            return jsonify({"error": "No video info returned"}), 400
+
+        # Use the first entry with video formats, or fall back to the first entry
+        info = entries[0]
+        for entry in entries:
+            if any(f.get("height") for f in entry.get("formats", [])):
+                info = entry
+                break
 
         # Build quality options — keep best format per resolution
         best_by_height = {}
