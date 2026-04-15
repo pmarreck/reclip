@@ -768,29 +768,33 @@
 
     function pollCard(idx) {
       const c = cardData[idx];
-      const iv = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/status/${c.jobId}`);
-          const data = await res.json();
-          if (data.status === 'done') {
-            clearInterval(iv);
-            c.status = 'done';
-            c.filename = data.filename;
-            renderCard(idx);
-            saveCard(idx);
-          } else if (data.status === 'error') {
-            clearInterval(iv);
+      let delay = 1000;
+      const maxDelay = 30000;
+      function tick() {
+        fetch(`/api/status/${c.jobId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.status === 'done') {
+              c.status = 'done';
+              c.filename = data.filename;
+              renderCard(idx);
+              saveCard(idx);
+            } else if (data.status === 'error') {
+              c.status = 'error';
+              c.error = data.error;
+              renderCard(idx);
+            } else {
+              delay = Math.min(delay * 1.5, maxDelay);
+              setTimeout(tick, delay);
+            }
+          })
+          .catch(() => {
             c.status = 'error';
-            c.error = data.error;
+            c.error = 'Lost connection to server';
             renderCard(idx);
-          }
-        } catch {
-          clearInterval(iv);
-          c.status = 'error';
-          c.error = 'Lost connection to server';
-          renderCard(idx);
-        }
-      }, 1000);
+          });
+      }
+      setTimeout(tick, delay);
     }
 
     function saveCard(idx) {
@@ -924,25 +928,29 @@
 
     function pollOp(idx, opKey, jobId) {
       const c = cardData[idx];
-      const iv = setInterval(async () => {
-        try {
-          const res = await fetch(`/api/status/${jobId}`);
-          const data = await res.json();
-          if (data.status === 'done') {
-            clearInterval(iv);
-            c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
+      let delay = 2000;
+      const maxDelay = 30000;
+      function tick() {
+        fetch(`/api/status/${jobId}`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.status === 'done') {
+              c.ops[opKey] = { status: 'done', text: data.text, jobId, filename: data.filename };
+              renderCard(idx);
+            } else if (data.status === 'error') {
+              c.ops[opKey] = { status: 'error', error: data.error };
+              renderCard(idx);
+            } else {
+              delay = Math.min(delay * 1.5, maxDelay);
+              setTimeout(tick, delay);
+            }
+          })
+          .catch(() => {
+            c.ops[opKey] = { status: 'error', error: 'Lost connection' };
             renderCard(idx);
-          } else if (data.status === 'error') {
-            clearInterval(iv);
-            c.ops[opKey] = { status: 'error', error: data.error };
-            renderCard(idx);
-          }
-        } catch {
-          clearInterval(iv);
-          c.ops[opKey] = { status: 'error', error: 'Lost connection' };
-          renderCard(idx);
-        }
-      }, 2000);
+          });
+      }
+      setTimeout(tick, delay);
     }
 
     function saveText(idx, opKey) {
