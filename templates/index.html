@@ -269,6 +269,47 @@
     }
     .card-btn-alt:hover { background: rgba(26,26,24,0.04); border-color: var(--fg); }
 
+    .op-result {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border: 1.5px solid var(--card-border);
+      border-radius: 8px;
+      background: rgba(26,26,24,0.02);
+      position: relative;
+    }
+    .op-result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .op-result-label {
+      font-size: 0.65rem;
+      font-weight: 500;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .op-result-text {
+      font-size: 0.78rem;
+      line-height: 1.5;
+      color: var(--fg);
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .op-result-text.expanded { max-height: none; }
+    .op-result-toggle {
+      font-size: 0.65rem;
+      color: var(--accent);
+      cursor: pointer;
+      border: none;
+      background: none;
+      font-family: 'DM Mono', monospace;
+      padding: 2px 0;
+    }
+    .op-result-toggle:hover { text-decoration: underline; }
+
     .card-status {
       font-size: 0.68rem;
       color: var(--muted);
@@ -630,7 +671,19 @@
         if (opState.status === 'processing') {
           opsHtml += `<div class="card-status downloading"><span class="spin"></span> ${label}...</div>`;
         } else if (opState.status === 'done') {
-          opsHtml += `<button class="card-dl-btn done" onclick="saveText(${idx}, '${op}')">${label} — Save</button>`;
+          const text = opState.text || '';
+          const isLong = text.length > 500;
+          const expanded = opState.expanded || false;
+          opsHtml += `<div class="op-result">
+            <div class="op-result-header">
+              <span class="op-result-label">${label}</span>
+              <div style="display:flex;gap:4px;">
+                ${isLong ? `<button class="op-result-toggle" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
+                <button class="card-dl-btn done" style="padding:3px 10px;font-size:0.65rem;" onclick="saveText(${idx}, '${op}')">Save</button>
+              </div>
+            </div>
+            <div class="op-result-text${expanded ? ' expanded' : ''}">${esc(text)}</div>
+          </div>`;
         } else if (opState.status === 'error') {
           opsHtml += `<span class="card-status error">${label}: ${esc(opState.error || 'Failed')}</span>`;
         }
@@ -829,6 +882,12 @@
     function toggleTranslate(idx) {
       cardData[idx].showTranslate = !cardData[idx].showTranslate;
       if (!cardData[idx].translateLang) cardData[idx].translateLang = 'English';
+      renderCard(idx);
+    }
+
+    function toggleExpand(idx, opKey) {
+      const op = cardData[idx].ops?.[opKey];
+      if (op) op.expanded = !op.expanded;
       renderCard(idx);
     }
 
