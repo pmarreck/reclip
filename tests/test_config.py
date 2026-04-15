@@ -44,7 +44,7 @@ def test_stt_defaults():
 	cfg = load_config()
 	assert cfg["stt_url"] == "http://localhost:8000/v1/audio/transcriptions"
 	assert cfg["stt_api_key"] == ""
-	assert cfg["stt_model"] == "mlx-community/whisper-large-v3-turbo"
+	assert cfg["stt_model"] == "whisper-large-v3-turbo-8bit"
 	assert cfg["stt_prompt"] == ""
 
 

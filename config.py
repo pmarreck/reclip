@@ -34,7 +34,7 @@ def load_config():
 		"cache_max_mb": int(os.environ.get("RECLIP_CACHE_MAX_MB", "1024")),
 		"stt_url": os.environ.get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
 		"stt_api_key": os.environ.get("RECLIP_STT_API_KEY", ""),
-		"stt_model": os.environ.get("RECLIP_STT_MODEL", "mlx-community/whisper-large-v3-turbo"),
+		"stt_model": os.environ.get("RECLIP_STT_MODEL", "whisper-large-v3-turbo-8bit"),
 		"stt_prompt": os.environ.get("RECLIP_STT_PROMPT", ""),
 		"summarize_url": os.environ.get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions"),
 		"summarize_api_key": os.environ.get("RECLIP_SUMMARIZE_API_KEY", ""),
