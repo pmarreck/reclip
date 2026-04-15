@@ -1,0 +1,142 @@
+import json
+import pytest
+import responses
+
+
+class TestTranscribe:
+	@responses.activate
+	def test_transcribe_posts_audio_file(self, tmp_path):
+		from llm_client import transcribe
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"fake audio data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "Hello world", "language": "en", "duration": 10.5},
+			status=200,
+		)
+
+		result = transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper-large-v3-turbo",
+			api_key="test-key",
+			prompt="",
+		)
+		assert result["text"] == "Hello world"
+		assert result["language"] == "en"
+		req = responses.calls[0].request
+		assert "Bearer test-key" in req.headers.get("Authorization", "")
+		assert b"fake audio data" in req.body
+
+	@responses.activate
+	def test_transcribe_no_api_key(self, tmp_path):
+		from llm_client import transcribe
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:9999/v1/audio/transcriptions",
+			json={"text": "ok"},
+			status=200,
+		)
+
+		transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:9999/v1/audio/transcriptions",
+			model="whisper",
+			api_key="",
+			prompt="",
+		)
+		req = responses.calls[0].request
+		assert "Authorization" not in req.headers
+
+	@responses.activate
+	def test_transcribe_error_raises(self, tmp_path):
+		from llm_client import transcribe, LLMError
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"error": {"message": "model not loaded"}},
+			status=400,
+		)
+
+		with pytest.raises(LLMError, match="model not loaded"):
+			transcribe(
+				audio_path=str(audio_file),
+				url="http://localhost:8000/v1/audio/transcriptions",
+				model="whisper",
+				api_key="",
+				prompt="",
+			)
+
+
+class TestChatCompletion:
+	@responses.activate
+	def test_chat_completion_returns_text(self):
+		from llm_client import chat_completion
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/chat/completions",
+			json={"choices": [{"message": {"content": "Summary here"}}]},
+			status=200,
+		)
+
+		result = chat_completion(
+			url="http://localhost:8000/v1/chat/completions",
+			model="gemma4",
+			api_key="key123",
+			system_prompt="Summarize this",
+			user_content="Long transcript...",
+		)
+		assert result == "Summary here"
+		req = responses.calls[0].request
+		body = json.loads(req.body)
+		assert body["model"] == "gemma4"
+		assert body["messages"][0]["role"] == "system"
+		assert body["messages"][1]["role"] == "user"
+		assert "Bearer key123" in req.headers["Authorization"]
+
+	@responses.activate
+	def test_chat_completion_no_api_key(self):
+		from llm_client import chat_completion
+		responses.add(
+			responses.POST,
+			"http://localhost:11434/v1/chat/completions",
+			json={"choices": [{"message": {"content": "ok"}}]},
+			status=200,
+		)
+
+		chat_completion(
+			url="http://localhost:11434/v1/chat/completions",
+			model="llama3",
+			api_key="",
+			system_prompt="prompt",
+			user_content="content",
+		)
+		req = responses.calls[0].request
+		assert "Authorization" not in req.headers
+
+	@responses.activate
+	def test_chat_completion_error_raises(self):
+		from llm_client import chat_completion, LLMError
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/chat/completions",
+			json={"error": {"message": "context too long"}},
+			status=400,
+		)
+
+		with pytest.raises(LLMError, match="context too long"):
+			chat_completion(
+				url="http://localhost:8000/v1/chat/completions",
+				model="gemma4",
+				api_key="",
+				system_prompt="p",
+				user_content="c",
+			)
