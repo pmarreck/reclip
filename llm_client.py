@@ -5,7 +5,7 @@ class LLMError(Exception):
 	pass
 
 
-def transcribe(audio_path, url, model, api_key="", prompt=""):
+def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 	"""Post an audio file for transcription via multipart form upload.
 
 	Sends file + model as multipart/form-data to any OpenAI-compatible
@@ -31,6 +31,8 @@ def transcribe(audio_path, url, model, api_key="", prompt=""):
 				error_msg = body["error"].get("message", str(body["error"]))
 		except (ValueError, KeyError):
 			error_msg = resp.text
+		if resp.status_code in (401, 403) and api_key_hint:
+			error_msg += f" (set {api_key_hint})"
 		raise LLMError(error_msg)
 
 	result = resp.json()
@@ -41,7 +43,7 @@ def transcribe(audio_path, url, model, api_key="", prompt=""):
 	}
 
 
-def chat_completion(url, model, api_key="", system_prompt="", user_content=""):
+def chat_completion(url, model, api_key="", system_prompt="", user_content="", api_key_hint=""):
 	"""Send a chat completion request to any OpenAI-compatible endpoint.
 
 	Builds a two-message conversation (system + user) as JSON and returns
@@ -69,6 +71,8 @@ def chat_completion(url, model, api_key="", system_prompt="", user_content=""):
 				error_msg = body["error"].get("message", str(body["error"]))
 		except (ValueError, KeyError):
 			error_msg = resp.text
+		if resp.status_code in (401, 403) and api_key_hint:
+			error_msg += f" (set {api_key_hint})"
 		raise LLMError(error_msg)
 
 	result = resp.json()

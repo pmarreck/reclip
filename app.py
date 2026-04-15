@@ -86,6 +86,7 @@ def _run_summarize_sync(url):
             model=cfg["stt_model"],
             api_key=cfg["stt_api_key"],
             prompt=cfg["stt_prompt"],
+            api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
         transcript = result["text"]
         cache.write_text(url, "transcript.txt", transcript)
@@ -95,6 +96,7 @@ def _run_summarize_sync(url):
         api_key=cfg["summarize_api_key"],
         system_prompt=cfg["summarize_prompt"],
         user_content=transcript,
+        api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
     )
     cache.write_text(url, "summary.txt", summary)
     return summary
@@ -194,6 +196,7 @@ def _run_transcribe(job_id, url):
             model=cfg["stt_model"],
             api_key=cfg["stt_api_key"],
             prompt=cfg["stt_prompt"],
+            api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
         transcript = result["text"]
         cache.write_text(url, "transcript.txt", transcript)
@@ -218,6 +221,7 @@ def _run_summarize(job_id, url):
                 model=cfg["stt_model"],
                 api_key=cfg["stt_api_key"],
                 prompt=cfg["stt_prompt"],
+                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
             )
             transcript = result["text"]
             cache.write_text(url, "transcript.txt", transcript)
@@ -227,6 +231,7 @@ def _run_summarize(job_id, url):
             api_key=cfg["summarize_api_key"],
             system_prompt=cfg["summarize_prompt"],
             user_content=transcript,
+            api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
         )
         cache.write_text(url, "summary.txt", summary)
         job["status"] = "done"
@@ -256,6 +261,7 @@ def _run_translate(job_id, url, language, source):
                     model=cfg["stt_model"],
                     api_key=cfg["stt_api_key"],
                     prompt=cfg["stt_prompt"],
+                    api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
                 )
                 source_text = result["text"]
                 cache.write_text(url, "transcript.txt", source_text)
@@ -272,6 +278,7 @@ def _run_translate(job_id, url, language, source):
             api_key=cfg["translate_api_key"],
             system_prompt=system_prompt,
             user_content=source_text,
+            api_key_hint="RECLIP_TRANSLATE_API_KEY or RECLIP_API_KEY",
         )
         filename = _translate_filename(source, language)
         cache.write_text(url, filename, translation)

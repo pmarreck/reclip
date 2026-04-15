@@ -60,6 +60,7 @@ def _ensure_transcript(url):
         model=cfg["stt_model"],
         api_key=cfg["stt_api_key"],
         prompt=cfg["stt_prompt"],
+        api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
     )
     text = result["text"]
     cache.write_text(url, "transcript.txt", text)
@@ -81,6 +82,7 @@ def _ensure_summary(url):
         api_key=cfg["summarize_api_key"],
         system_prompt=cfg["summarize_prompt"],
         user_content=transcript,
+        api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
     )
     cache.write_text(url, "summary.txt", summary)
     return summary
@@ -154,6 +156,7 @@ def cmd_translate(args):
         api_key=cfg["translate_api_key"],
         system_prompt=prompt,
         user_content=source_text,
+        api_key_hint="RECLIP_TRANSLATE_API_KEY or RECLIP_API_KEY",
     )
     cache.write_text(args.url, filename, translated)
     print(translated)
