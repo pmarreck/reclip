@@ -10,7 +10,8 @@ from flask import Flask, request, jsonify, send_file, render_template, Response
 
 from config import load_config
 from cache import Cache
-from llm_client import transcribe as llm_transcribe, chat_completion, LLMError
+import hashlib
+from llm_client import transcribe as llm_transcribe, chat_completion, text_to_speech, LLMError
 
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
@@ -670,6 +671,121 @@ def counterargue_endpoint():
     jobs[job_id] = {"status": "processing", "type": "text", "url": url}
 
     thread = threading.Thread(target=_run_counterargue, args=(job_id, url))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"job_id": job_id})
+
+
+def _tts_cache_filename(text, voice, speed):
+    """Generate a cache filename based on content + voice settings hash."""
+    key_material = f"{text}|{voice}|{speed}"
+    h = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:16]
+    return f"tts-{h}.wav"
+
+
+def _resolve_voice(url):
+    """Pick the best voice reference: video's own audio > global default > none."""
+    # Use the video's cached audio for speaker cloning
+    if cache.has_file(url, "audio.mp3"):
+        return cache.entry_path(url, "audio.mp3")
+    # Fall back to globally configured voice
+    if cfg["tts_voice"]:
+        return cfg["tts_voice"]
+    return ""
+
+
+def _run_speak(job_id, url, source, speed, voice_override):
+    job = jobs[job_id]
+    try:
+        # Resolve which text to speak
+        source_map = {
+            "transcript": "transcript.txt",
+            "summary": "summary.txt",
+            "counterargue": "counterargue.txt",
+        }
+        if source.startswith("translation-") or source.startswith("summary-"):
+            source_file = source + ".txt" if not source.endswith(".txt") else source
+        else:
+            source_file = source_map.get(source)
+        if not source_file:
+            raise RuntimeError(f"Unknown source: {source}")
+
+        text = cache.read_text(url, source_file)
+        if text is None:
+            raise RuntimeError(f"No {source} text found — run that operation first")
+
+        voice = voice_override or _resolve_voice(url)
+        tts_filename = _tts_cache_filename(text, voice, speed)
+
+        # Check TTS cache
+        if cache.has_file(url, tts_filename):
+            job["status"] = "done"
+            job["file"] = cache.entry_path(url, tts_filename)
+            job["filename"] = f"{source}.wav"
+            return
+
+        audio_bytes = text_to_speech(
+            url=cfg["tts_url"],
+            model=cfg["tts_model"],
+            text=text,
+            api_key=cfg["tts_api_key"],
+            voice=voice,
+            speed=speed,
+            api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
+        )
+
+        # Write to cache
+        out_path = cache.entry_path(url, tts_filename)
+        with open(out_path, "wb") as f:
+            f.write(audio_bytes)
+
+        job["status"] = "done"
+        job["file"] = out_path
+        job["filename"] = f"{source}.wav"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
+@app.route("/api/speak", methods=["POST"])
+def speak_endpoint():
+    data = request.json
+    url = data.get("url", "").strip()
+    source = data.get("source", "summary").strip()
+    speed = float(data.get("speed", cfg["tts_speed"]))
+    voice_override = data.get("voice", "").strip()
+
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    # Quick cache check
+    voice = voice_override or _resolve_voice(url)
+    source_map = {
+        "transcript": "transcript.txt",
+        "summary": "summary.txt",
+        "counterargue": "counterargue.txt",
+    }
+    if source.startswith("translation-") or source.startswith("summary-"):
+        source_file = source + ".txt" if not source.endswith(".txt") else source
+    else:
+        source_file = source_map.get(source, source + ".txt")
+
+    text = cache.read_text(url, source_file)
+    if text:
+        tts_filename = _tts_cache_filename(text, voice, speed)
+        if cache.has_file(url, tts_filename):
+            return send_file(
+                cache.entry_path(url, tts_filename),
+                mimetype="audio/wav",
+                as_attachment=False,
+                download_name=f"{source}.wav",
+            )
+
+    job_id = uuid.uuid4().hex[:10]
+    jobs[job_id] = {"status": "processing", "type": "media", "url": url}
+
+    thread = threading.Thread(target=_run_speak, args=(job_id, url, source, speed, voice_override))
     thread.daemon = True
     thread.start()
 

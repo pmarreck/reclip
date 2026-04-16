@@ -675,10 +675,16 @@
           const text = opState.text || '';
           const isLong = text.length > 500;
           const expanded = opState.expanded || false;
+          const audioHtml = opState.audioUrl
+            ? `<audio controls style="height:28px;max-width:200px;" src="${opState.audioUrl}"></audio>`
+            : (opState.audioLoading
+              ? `<span class="card-status downloading" style="font-size:0.6rem;"><span class="spin"></span></span>`
+              : `<button class="op-result-toggle" onclick="listenText(${idx},'${op}')">Listen</button>`);
           opsHtml += `<div class="op-result">
             <div class="op-result-header">
               <span class="op-result-label">${label}</span>
-              <div style="display:flex;gap:4px;">
+              <div style="display:flex;gap:4px;align-items:center;">
+                ${audioHtml}
                 <button class="op-result-toggle" onclick="copyText(${idx},'${op}')">Copy</button>
                 ${isLong ? `<button class="op-result-toggle" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
                 <button class="card-dl-btn done" style="padding:3px 10px;font-size:0.65rem;" onclick="saveText(${idx}, '${op}')">Save</button>
@@ -903,6 +909,108 @@
           if (btn.textContent === 'Copy') { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); break; }
         }
       });
+    }
+
+    function _opToSource(opKey) {
+      // Map UI op key to API source name
+      const map = {
+        'transcribe': 'transcript',
+        'summarize': 'summary',
+        'counterargue': 'counterargue',
+        'translate_transcript': null,  // needs language
+        'translate_summary': null,     // needs language
+      };
+      return map[opKey];
+    }
+
+    async function listenText(idx, opKey) {
+      const c = cardData[idx];
+      const op = c.ops?.[opKey];
+      if (!op) return;
+
+      op.audioLoading = true;
+      renderCard(idx);
+
+      // Map op key to API source param
+      let source = _opToSource(opKey);
+      if (!source) {
+        // Translation — need to reconstruct the filename
+        const lang = (c.translateLang || 'English').toLowerCase().trim().replace(/ /g, '-');
+        source = opKey === 'translate_summary' ? `summary-${lang}` : `translation-${lang}`;
+      }
+
+      try {
+        const res = await fetch('/api/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, source }),
+        });
+
+        if (res.headers.get('content-type')?.includes('audio')) {
+          // Direct cached audio returned
+          const blob = await res.blob();
+          op.audioUrl = URL.createObjectURL(blob);
+          op.audioLoading = false;
+          renderCard(idx);
+        } else {
+          // Got a job_id — need to poll then fetch audio
+          const data = await res.json();
+          if (data.error) {
+            op.audioLoading = false;
+            op.audioError = data.error;
+            renderCard(idx);
+            return;
+          }
+          pollSpeakJob(idx, opKey, data.job_id);
+        }
+      } catch (err) {
+        op.audioLoading = false;
+        op.audioError = err.message;
+        renderCard(idx);
+      }
+    }
+
+    function pollSpeakJob(idx, opKey, jobId) {
+      const c = cardData[idx];
+      const op = c.ops?.[opKey];
+      if (!op) return;
+
+      if (typeof EventSource !== 'undefined') {
+        const es = new EventSource(`/api/stream/${jobId}`);
+        es.onmessage = async (e) => {
+          const data = JSON.parse(e.data);
+          if (data.status === 'done') {
+            es.close();
+            // Fetch the audio file
+            const res = await fetch(`/api/file/${jobId}`);
+            const blob = await res.blob();
+            op.audioUrl = URL.createObjectURL(blob);
+            op.audioLoading = false;
+            renderCard(idx);
+          } else if (data.status === 'error' || data.error) {
+            es.close();
+            op.audioLoading = false;
+            op.audioError = data.error;
+            renderCard(idx);
+          }
+        };
+        es.onerror = () => { es.close(); op.audioLoading = false; renderCard(idx); };
+      } else {
+        _pollFallback(`/api/status/${jobId}`, 2000, async (data) => {
+          if (data.status === 'done') {
+            const res = await fetch(`/api/file/${jobId}`);
+            const blob = await res.blob();
+            op.audioUrl = URL.createObjectURL(blob);
+            op.audioLoading = false;
+            renderCard(idx);
+            return true;
+          } else if (data.status === 'error') {
+            op.audioLoading = false;
+            renderCard(idx);
+            return true;
+          }
+        }, () => { op.audioLoading = false; renderCard(idx); });
+      }
     }
 
     function _initOps(idx) {

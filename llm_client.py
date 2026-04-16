@@ -77,3 +77,39 @@ def chat_completion(url, model, api_key="", system_prompt="", user_content="", a
 
 	result = resp.json()
 	return result["choices"][0]["message"]["content"]
+
+
+def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
+                   response_format="wav", api_key_hint=""):
+	"""Generate speech audio from text via OpenAI-compatible TTS endpoint.
+
+	Returns raw audio bytes.
+	"""
+	headers = {"Content-Type": "application/json"}
+	if api_key:
+		headers["Authorization"] = f"Bearer {api_key}"
+
+	payload = {
+		"model": model,
+		"input": text,
+		"speed": speed,
+		"response_format": response_format,
+	}
+	if voice:
+		payload["voice"] = voice
+
+	resp = requests.post(url, headers=headers, json=payload, timeout=600)
+
+	if resp.status_code >= 400:
+		error_msg = "Text-to-speech failed"
+		try:
+			body = resp.json()
+			if "error" in body:
+				error_msg = body["error"].get("message", str(body["error"]))
+		except (ValueError, KeyError):
+			error_msg = resp.text
+		if resp.status_code in (401, 403) and api_key_hint:
+			error_msg += f" (set {api_key_hint})"
+		raise LLMError(error_msg)
+
+	return resp.content

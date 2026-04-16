@@ -64,4 +64,9 @@ def load_config():
 		"counterargue_api_key": os.environ.get("RECLIP_COUNTERARGUE_API_KEY", common_key),
 		"counterargue_model": os.environ.get("RECLIP_COUNTERARGUE_MODEL", os.environ.get("RECLIP_SUMMARIZE_MODEL", "gemma4-heretical-mlx-8bit")),
 		"counterargue_prompt": os.environ.get("RECLIP_COUNTERARGUE_PROMPT", DEFAULT_COUNTERARGUE_PROMPT),
+		"tts_url": os.environ.get("RECLIP_TTS_URL", "http://localhost:8000/v1/audio/speech"),
+		"tts_api_key": os.environ.get("RECLIP_TTS_API_KEY", common_key),
+		"tts_model": os.environ.get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-Base-8bit"),
+		"tts_voice": os.environ.get("RECLIP_TTS_VOICE", ""),
+		"tts_speed": float(os.environ.get("RECLIP_TTS_SPEED", "1.0")),
 	}
