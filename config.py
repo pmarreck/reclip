@@ -20,6 +20,19 @@ DEFAULT_TRANSLATE_PROMPT = (
 	"all formatting."
 )
 
+DEFAULT_COUNTERARGUE_PROMPT = (
+	"You are a critical thinker and skilled debater. Analyze the following "
+	"transcript and identify claims, arguments, or assertions that can be "
+	"challenged. For each counterarguable point: (1) State the original claim "
+	"(2) Present the strongest counterargument with evidence or reasoning "
+	"(3) Note the strength of the counterargument (strong, moderate, weak). "
+	"Be fair and intellectually honest — distinguish between factual errors, "
+	"logical fallacies, unsupported claims, and matters of legitimate debate. "
+	"If the content is purely factual reporting, a tutorial, music, or "
+	"otherwise not appropriate to counterargue, state that clearly and explain "
+	"why. Do not manufacture controversy where none exists."
+)
+
 
 def _default_cache_dir():
 	xdg = os.environ.get("XDG_CACHE_HOME")
@@ -47,4 +60,8 @@ def load_config():
 		"translate_api_key": os.environ.get("RECLIP_TRANSLATE_API_KEY", common_key),
 		"translate_model": os.environ.get("RECLIP_TRANSLATE_MODEL", "gemma4-heretical-mlx-8bit"),
 		"translate_prompt": os.environ.get("RECLIP_TRANSLATE_PROMPT", DEFAULT_TRANSLATE_PROMPT),
+		"counterargue_url": os.environ.get("RECLIP_COUNTERARGUE_URL", os.environ.get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions")),
+		"counterargue_api_key": os.environ.get("RECLIP_COUNTERARGUE_API_KEY", common_key),
+		"counterargue_model": os.environ.get("RECLIP_COUNTERARGUE_MODEL", os.environ.get("RECLIP_SUMMARIZE_MODEL", "gemma4-heretical-mlx-8bit")),
+		"counterargue_prompt": os.environ.get("RECLIP_COUNTERARGUE_PROMPT", DEFAULT_COUNTERARGUE_PROMPT),
 	}

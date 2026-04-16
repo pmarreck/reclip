@@ -305,6 +305,38 @@ def _run_summarize(job_id, url):
         job["error"] = str(e)
 
 
+def _run_counterargue(job_id, url):
+    job = jobs[job_id]
+    try:
+        transcript = cache.read_text(url, "transcript.txt")
+        if transcript is None:
+            audio_path = _ensure_audio(url)
+            result = llm_transcribe(
+                audio_path=audio_path,
+                url=cfg["stt_url"],
+                model=cfg["stt_model"],
+                api_key=cfg["stt_api_key"],
+                prompt=cfg["stt_prompt"],
+                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            )
+            transcript = _save_transcript(url, result["text"])
+        counterargument = chat_completion(
+            url=cfg["counterargue_url"],
+            model=cfg["counterargue_model"],
+            api_key=cfg["counterargue_api_key"],
+            system_prompt=cfg["counterargue_prompt"],
+            user_content=transcript,
+            api_key_hint="RECLIP_COUNTERARGUE_API_KEY or RECLIP_API_KEY",
+        )
+        cache.write_text(url, "counterargue.txt", counterargument)
+        job["status"] = "done"
+        job["text"] = counterargument
+        job["filename"] = "counterargue.txt"
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+
+
 def _run_translate(job_id, url, language, source):
     job = jobs[job_id]
     try:
@@ -616,6 +648,28 @@ def summarize_endpoint():
     jobs[job_id] = {"status": "processing", "type": "text", "url": url}
 
     thread = threading.Thread(target=_run_summarize, args=(job_id, url))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/counterargue", methods=["POST"])
+def counterargue_endpoint():
+    data = request.json
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    # Check cache first
+    cached_text = cache.read_text(url, "counterargue.txt")
+    if cached_text is not None:
+        return jsonify({"cached": True, "text": cached_text})
+
+    job_id = uuid.uuid4().hex[:10]
+    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
+
+    thread = threading.Thread(target=_run_counterargue, args=(job_id, url))
     thread.daemon = True
     thread.start()
 

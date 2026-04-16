@@ -651,6 +651,7 @@
           <button class="card-dl-btn card-btn-alt" onclick="transcribeCard(${idx})">Transcribe</button>
           <button class="card-dl-btn card-btn-alt" onclick="summarizeCard(${idx})">Summarize</button>
           <button class="card-dl-btn card-btn-alt" onclick="toggleTranslate(${idx})">Translate</button>
+          <button class="card-dl-btn card-btn-alt" onclick="counterargueCard(${idx})">Counterargue</button>
           ${qualityChips}`;
       } else if (c.status === 'downloading') {
         actionHtml = `<span class="card-status downloading"><span class="spin"></span> Downloading...</span>`;
@@ -664,7 +665,7 @@
 
       // Per-operation status indicators
       let opsHtml = '';
-      for (const op of ['transcribe', 'summarize', 'translate_transcript', 'translate_summary']) {
+      for (const op of ['transcribe', 'summarize', 'translate_transcript', 'translate_summary', 'counterargue']) {
         const opState = c.ops?.[op];
         if (!opState) continue;
         const label = op.replace(/_/g, ' ');
@@ -678,6 +679,7 @@
             <div class="op-result-header">
               <span class="op-result-label">${label}</span>
               <div style="display:flex;gap:4px;">
+                <button class="op-result-toggle" onclick="copyText(${idx},'${op}')">Copy</button>
                 ${isLong ? `<button class="op-result-toggle" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
                 <button class="card-dl-btn done" style="padding:3px 10px;font-size:0.65rem;" onclick="saveText(${idx}, '${op}')">Save</button>
               </div>
@@ -891,6 +893,18 @@
       renderCard(idx);
     }
 
+    function copyText(idx, opKey) {
+      const op = cardData[idx].ops?.[opKey];
+      if (!op || !op.text) return;
+      navigator.clipboard.writeText(op.text).then(() => {
+        // Brief visual feedback — swap button text
+        const btns = document.querySelectorAll(`#card-${idx} .op-result-toggle`);
+        for (const btn of btns) {
+          if (btn.textContent === 'Copy') { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); break; }
+        }
+      });
+    }
+
     function _initOps(idx) {
       if (!cardData[idx].ops) cardData[idx].ops = {};
     }
@@ -953,6 +967,37 @@
         pollOp(idx, 'summarize', data.job_id);
       } catch (err) {
         c.ops.summarize = { status: 'error', error: err.message };
+        renderCard(idx);
+      }
+    }
+
+    async function counterargueCard(idx) {
+      const c = cardData[idx];
+      _initOps(idx);
+      c.ops.counterargue = { status: 'processing' };
+      renderCard(idx);
+
+      try {
+        const res = await fetch('/api/counterargue', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, title: c.title || '' }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          c.ops.counterargue = { status: 'error', error: data.error };
+          renderCard(idx);
+          return;
+        }
+        if (data.cached) {
+          c.ops.counterargue = { status: 'done', text: data.text, jobId: null };
+          renderCard(idx);
+          return;
+        }
+        c.ops.counterargue.jobId = data.job_id;
+        pollOp(idx, 'counterargue', data.job_id);
+      } catch (err) {
+        c.ops.counterargue = { status: 'error', error: err.message };
         renderCard(idx);
       }
     }
