@@ -675,19 +675,20 @@
           const text = opState.text || '';
           const isLong = text.length > 500;
           const expanded = opState.expanded || false;
+          const btnStyle = 'padding:3px 10px;font-size:0.65rem;';
           const audioHtml = opState.audioUrl
-            ? `<audio controls style="height:28px;max-width:200px;" src="${opState.audioUrl}"></audio>`
+            ? `<audio controls autoplay style="height:28px;max-width:200px;" src="${opState.audioUrl}"></audio>`
             : (opState.audioLoading
               ? `<span class="card-status downloading" style="font-size:0.6rem;"><span class="spin"></span></span>`
-              : `<button class="op-result-toggle" onclick="listenText(${idx},'${op}')">Listen</button>`);
+              : `<button class="card-dl-btn done" style="${btnStyle}" onclick="listenText(${idx},'${op}')">&#128264; Listen</button>`);
           opsHtml += `<div class="op-result">
             <div class="op-result-header">
               <span class="op-result-label">${label}</span>
               <div style="display:flex;gap:4px;align-items:center;">
                 ${audioHtml}
-                <button class="op-result-toggle" onclick="copyText(${idx},'${op}')">Copy</button>
-                ${isLong ? `<button class="op-result-toggle" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
-                <button class="card-dl-btn done" style="padding:3px 10px;font-size:0.65rem;" onclick="saveText(${idx}, '${op}')">Save</button>
+                <button class="card-dl-btn done" style="${btnStyle}" onclick="copyText(${idx},'${op}')">Copy</button>
+                ${isLong ? `<button class="card-dl-btn done" style="${btnStyle}" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
+                <button class="card-dl-btn done" style="${btnStyle}" onclick="saveText(${idx}, '${op}')">Save</button>
               </div>
             </div>
             <div class="op-result-text${expanded ? ' expanded' : ''}">${esc(text)}</div>

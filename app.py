@@ -685,10 +685,34 @@ def _tts_cache_filename(text, voice, speed):
 
 
 def _resolve_voice(url):
-    """Pick the best voice reference: video's own audio > global default > none."""
-    # Use the video's cached audio for speaker cloning
+    """Pick the best voice reference: middle 10s of video audio > global default > none.
+
+    Extracts a 10-second clip from the middle of the audio for voice cloning,
+    avoiding intro/outro music and getting the primary speaker.
+    """
     if cache.has_file(url, "audio.mp3"):
-        return cache.entry_path(url, "audio.mp3")
+        voice_clip = cache.entry_path(url, "voice_sample.wav")
+        if not os.path.isfile(voice_clip):
+            audio_path = cache.entry_path(url, "audio.mp3")
+            try:
+                # Get duration via ffprobe
+                probe = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                     "-of", "csv=p=0", audio_path],
+                    capture_output=True, text=True, timeout=10,
+                )
+                duration = float(probe.stdout.strip()) if probe.returncode == 0 else 60
+                # Extract 10 seconds from the middle
+                start = max(0, (duration / 2) - 5)
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", audio_path, "-ss", str(start),
+                     "-t", "10", "-ar", "24000", "-ac", "1", voice_clip],
+                    capture_output=True, timeout=30,
+                )
+            except Exception:
+                return cfg["tts_voice"] or ""
+        if os.path.isfile(voice_clip):
+            return voice_clip
     # Fall back to globally configured voice
     if cfg["tts_voice"]:
         return cfg["tts_voice"]
