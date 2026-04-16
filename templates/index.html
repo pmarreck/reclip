@@ -676,21 +676,23 @@
           const isLong = text.length > 500;
           const expanded = opState.expanded || false;
           const btnStyle = 'padding:3px 10px;font-size:0.65rem;';
-          const audioHtml = opState.audioUrl
-            ? `<audio controls autoplay style="height:28px;max-width:200px;" src="${opState.audioUrl}"></audio>`
-            : (opState.audioLoading
-              ? `<span class="card-status downloading" style="font-size:0.6rem;"><span class="spin"></span></span>`
-              : `<button class="card-dl-btn done" style="${btnStyle}" onclick="listenText(${idx},'${op}')">&#128264; Listen</button>`);
+          const listenHtml = opState.audioLoading
+            ? `<span class="card-status downloading" style="font-size:0.6rem;"><span class="spin"></span> Generating audio...</span>`
+            : `<button class="card-dl-btn done" style="${btnStyle}" onclick="listenText(${idx},'${op}')">&#128264; Listen</button>`;
+          const audioPlayerHtml = opState.audioUrl
+            ? `<div style="margin-top:6px;"><audio controls autoplay style="width:100%;height:32px;" src="${opState.audioUrl}"></audio></div>`
+            : '';
           opsHtml += `<div class="op-result">
             <div class="op-result-header">
               <span class="op-result-label">${label}</span>
-              <div style="display:flex;gap:4px;align-items:center;">
-                ${audioHtml}
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                ${opState.audioUrl ? '' : listenHtml}
                 <button class="card-dl-btn done" style="${btnStyle}" onclick="copyText(${idx},'${op}')">Copy</button>
                 ${isLong ? `<button class="card-dl-btn done" style="${btnStyle}" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
                 <button class="card-dl-btn done" style="${btnStyle}" onclick="saveText(${idx}, '${op}')">Save</button>
               </div>
             </div>
+            ${audioPlayerHtml}
             <div class="op-result-text${expanded ? ' expanded' : ''}">${esc(text)}</div>
           </div>`;
         } else if (opState.status === 'error') {

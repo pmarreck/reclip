@@ -68,5 +68,4 @@ def load_config():
 		"tts_api_key": os.environ.get("RECLIP_TTS_API_KEY", common_key),
 		"tts_model": os.environ.get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-Base-8bit"),
 		"tts_voice": os.environ.get("RECLIP_TTS_VOICE", ""),
-		"tts_speed": float(os.environ.get("RECLIP_TTS_SPEED", "1.0")),
 	}

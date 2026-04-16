@@ -677,9 +677,9 @@ def counterargue_endpoint():
     return jsonify({"job_id": job_id})
 
 
-def _tts_cache_filename(text, voice, speed):
-    """Generate a cache filename based on content + voice settings hash."""
-    key_material = f"{text}|{voice}|{speed}"
+def _tts_cache_filename(text, voice):
+    """Generate a cache filename based on content + voice hash."""
+    key_material = f"{text}|{voice}"
     h = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:16]
     return f"tts-{h}.wav"
 
@@ -719,7 +719,7 @@ def _resolve_voice(url):
     return ""
 
 
-def _run_speak(job_id, url, source, speed, voice_override):
+def _run_speak(job_id, url, source, voice_override):
     job = jobs[job_id]
     try:
         # Resolve which text to speak
@@ -740,7 +740,7 @@ def _run_speak(job_id, url, source, speed, voice_override):
             raise RuntimeError(f"No {source} text found — run that operation first")
 
         voice = voice_override or _resolve_voice(url)
-        tts_filename = _tts_cache_filename(text, voice, speed)
+        tts_filename = _tts_cache_filename(text, voice)
 
         # Check TTS cache
         if cache.has_file(url, tts_filename):
@@ -755,7 +755,6 @@ def _run_speak(job_id, url, source, speed, voice_override):
             text=text,
             api_key=cfg["tts_api_key"],
             voice=voice,
-            speed=speed,
             api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
         )
 
@@ -777,7 +776,6 @@ def speak_endpoint():
     data = request.json
     url = data.get("url", "").strip()
     source = data.get("source", "summary").strip()
-    speed = float(data.get("speed", cfg["tts_speed"]))
     voice_override = data.get("voice", "").strip()
 
     if not url:
@@ -797,7 +795,7 @@ def speak_endpoint():
 
     text = cache.read_text(url, source_file)
     if text:
-        tts_filename = _tts_cache_filename(text, voice, speed)
+        tts_filename = _tts_cache_filename(text, voice)
         if cache.has_file(url, tts_filename):
             return send_file(
                 cache.entry_path(url, tts_filename),
@@ -809,7 +807,7 @@ def speak_endpoint():
     job_id = uuid.uuid4().hex[:10]
     jobs[job_id] = {"status": "processing", "type": "media", "url": url}
 
-    thread = threading.Thread(target=_run_speak, args=(job_id, url, source, speed, voice_override))
+    thread = threading.Thread(target=_run_speak, args=(job_id, url, source, voice_override))
     thread.daemon = True
     thread.start()
 
