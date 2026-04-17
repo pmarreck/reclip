@@ -677,6 +677,74 @@ def counterargue_endpoint():
     return jsonify({"job_id": job_id})
 
 
+def _chunk_text_for_tts(text, max_chars=300):
+    """Split text into TTS-friendly chunks at paragraph/sentence boundaries.
+
+    Qwen3-TTS drifts in voice consistency on long text (>300 chars is shaky,
+    >500 very bad). This splits at paragraph breaks first, then sentence
+    boundaries, then word boundaries as a last resort.
+    """
+    # Strip metadata header if present
+    if "=== Transcript ===" in text:
+        text = text.split("=== Transcript ===", 1)[1].strip()
+
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    chunks = []
+    for para in paragraphs:
+        if len(para) <= max_chars:
+            chunks.append(para)
+            continue
+        # Split paragraph on sentence boundaries
+        import re
+        sentences = re.split(r'(?<=[.!?])\s+', para)
+        current = ""
+        for sent in sentences:
+            if len(current) + len(sent) + 1 <= max_chars:
+                current = (current + " " + sent).strip() if current else sent
+            else:
+                if current:
+                    chunks.append(current)
+                if len(sent) <= max_chars:
+                    current = sent
+                else:
+                    # Sentence itself too long — split on word boundaries
+                    words = sent.split()
+                    w_current = ""
+                    for w in words:
+                        if len(w_current) + len(w) + 1 <= max_chars:
+                            w_current = (w_current + " " + w).strip() if w_current else w
+                        else:
+                            if w_current:
+                                chunks.append(w_current)
+                            w_current = w
+                    current = w_current
+        if current:
+            chunks.append(current)
+    return chunks if chunks else [text]
+
+
+def _concat_wavs(wav_bytes_list, out_path):
+    """Concatenate multiple WAV byte blobs into one file, preserving format params."""
+    import wave
+    if len(wav_bytes_list) == 1:
+        with open(out_path, "wb") as f:
+            f.write(wav_bytes_list[0])
+        return
+
+    # Collect frames from each blob
+    all_frames = []
+    params = None
+    for blob in wav_bytes_list:
+        with wave.open(io.BytesIO(blob), "rb") as w:
+            if params is None:
+                params = w.getparams()
+            all_frames.append(w.readframes(w.getnframes()))
+
+    with wave.open(out_path, "wb") as out:
+        out.setparams(params)
+        out.writeframes(b"".join(all_frames))
+
+
 def _tts_cache_filename(text, voice):
     """Generate a cache filename based on content + voice hash."""
     key_material = f"{text}|{voice}"
@@ -749,19 +817,36 @@ def _run_speak(job_id, url, source, voice_override):
             job["filename"] = f"{source}.wav"
             return
 
-        audio_bytes = text_to_speech(
-            url=cfg["tts_url"],
-            model=cfg["tts_model"],
-            text=text,
-            api_key=cfg["tts_api_key"],
-            voice=voice,
-            api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
-        )
+        # Chunk long text to avoid Qwen3-TTS voice drift on >300 chars
+        # (see github.com/QwenLM/Qwen3-TTS issues #80, #239)
+        chunks = _chunk_text_for_tts(text, max_chars=300)
+        chunk_wavs = []
+        for i, chunk in enumerate(chunks):
+            job["progress"] = f"chunk {i+1}/{len(chunks)}"
+            chunk_wav = text_to_speech(
+                url=cfg["tts_url"],
+                model=cfg["tts_model"],
+                text=chunk,
+                api_key=cfg["tts_api_key"],
+                voice=voice,
+                api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
+            )
+            chunk_wavs.append(chunk_wav)
 
-        # Write to cache
+        # Concatenate WAV chunks into single output
         out_path = cache.entry_path(url, tts_filename)
-        with open(out_path, "wb") as f:
-            f.write(audio_bytes)
+        _concat_wavs(chunk_wavs, out_path)
+
+        # Also produce an MP3 for compact downloads
+        mp3_path = out_path.replace(".wav", ".mp3")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", out_path, "-codec:a", "libmp3lame",
+                 "-qscale:a", "4", mp3_path],
+                capture_output=True, timeout=60,
+            )
+        except Exception:
+            pass  # MP3 is a bonus; WAV is the authoritative format
 
         job["status"] = "done"
         job["file"] = out_path
@@ -812,6 +897,57 @@ def speak_endpoint():
     thread.start()
 
     return jsonify({"job_id": job_id})
+
+
+@app.route("/api/speak/download", methods=["POST"])
+def speak_download():
+    """Download cached TTS audio as WAV or MP3."""
+    data = request.json
+    url = data.get("url", "").strip()
+    source = data.get("source", "summary").strip()
+    fmt = data.get("format", "mp3").strip().lower()
+    voice_override = data.get("voice", "").strip()
+
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    voice = voice_override or _resolve_voice(url)
+    source_map = {
+        "transcript": "transcript.txt",
+        "summary": "summary.txt",
+        "counterargue": "counterargue.txt",
+    }
+    if source.startswith("translation-") or source.startswith("summary-"):
+        source_file = source + ".txt" if not source.endswith(".txt") else source
+    else:
+        source_file = source_map.get(source, source + ".txt")
+
+    text = cache.read_text(url, source_file)
+    if not text:
+        return jsonify({"error": "No text to speak"}), 404
+
+    tts_filename = _tts_cache_filename(text, voice)
+    wav_path = cache.entry_path(url, tts_filename)
+
+    if fmt == "mp3":
+        mp3_path = wav_path.replace(".wav", ".mp3")
+        if not os.path.isfile(mp3_path) and os.path.isfile(wav_path):
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-i", wav_path, "-codec:a", "libmp3lame",
+                     "-qscale:a", "4", mp3_path],
+                    capture_output=True, timeout=60,
+                )
+            except Exception:
+                pass
+        if os.path.isfile(mp3_path):
+            return send_file(mp3_path, mimetype="audio/mpeg",
+                             as_attachment=True, download_name=f"{source}.mp3")
+
+    if os.path.isfile(wav_path):
+        return send_file(wav_path, mimetype="audio/wav",
+                         as_attachment=True, download_name=f"{source}.wav")
+    return jsonify({"error": "Audio not found"}), 404
 
 
 @app.route("/api/translate", methods=["POST"])
