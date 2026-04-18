@@ -1,5 +1,12 @@
 import os
+import tempfile
 import pytest
+
+# Isolate test config dir before importing app (which loads config at import time).
+# Individual tests can still override via monkeypatch + app.cfg = Config() if needed.
+_test_config_dir = tempfile.mkdtemp(prefix="reclip-test-config-")
+os.environ.setdefault("RECLIP_CONFIG_DIR", _test_config_dir)
+
 from app import app as flask_app
 
 

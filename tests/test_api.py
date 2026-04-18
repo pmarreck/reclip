@@ -498,3 +498,34 @@ class TestConfigFooter:
         assert "cache" in data
         assert "stt_host" in data
         assert "llm_host" in data
+
+
+class TestSettingsEndpoint:
+    def test_get_settings_returns_file_content(self, client):
+        resp = client.get("/api/settings")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert "content" in data
+        assert "path" in data
+        assert "RECLIP_STT_URL" in data["content"]
+
+    def test_post_settings_writes_file(self, client):
+        new_content = "RECLIP_STT_MODEL=posted-via-api\n"
+        resp = client.post("/api/settings", json={"content": new_content})
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data.get("ok") is True
+
+        # Verify round-trip
+        resp2 = client.get("/api/settings")
+        assert "posted-via-api" in resp2.get_json()["content"]
+
+    def test_post_missing_content_returns_error(self, client):
+        resp = client.post("/api/settings", json={})
+        assert resp.status_code == 400
+        assert "content" in resp.get_json().get("error", "").lower()
+
+    def test_loopback_gating(self, client):
+        # Simulate non-loopback remote addr
+        resp = client.get("/api/settings", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403

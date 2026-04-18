@@ -436,6 +436,98 @@
       line-height: 1.8;
     }
 
+    .settings-link {
+      color: var(--accent);
+      cursor: pointer;
+      background: none;
+      border: none;
+      font-family: 'DM Mono', monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      padding: 0;
+      margin-left: 8px;
+    }
+    .settings-link:hover { text-decoration: underline; }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: var(--card);
+      border-radius: var(--radius);
+      width: min(920px, 96vw);
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      border: 1.5px solid var(--card-border);
+    }
+    .modal-header {
+      padding: 18px 24px;
+      border-bottom: 1.5px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .modal-title {
+      font-family: 'Instrument Serif', serif;
+      font-size: 1.4rem;
+    }
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 1.4rem;
+      cursor: pointer;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+    }
+    .modal-body {
+      padding: 18px 24px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .modal-body .hint {
+      margin-bottom: 12px;
+      line-height: 1.6;
+    }
+    .modal-textarea {
+      width: 100%;
+      min-height: 420px;
+      padding: 14px;
+      border: 1.5px solid var(--card-border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: 'DM Mono', monospace;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      resize: vertical;
+    }
+    .modal-footer {
+      padding: 14px 24px;
+      border-top: 1.5px solid var(--card-border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .modal-path {
+      font-size: 0.65rem;
+      color: var(--muted);
+      word-break: break-all;
+    }
+    .modal-actions {
+      display: flex;
+      gap: 8px;
+    }
+
     /* Mobile */
     @media (max-width: 500px) {
       .brand h1 { font-size: 3rem; }
@@ -1260,16 +1352,87 @@
       }
     }
 
+    let _settingsLoopback = false;
+
     (async function loadConfigFooter() {
       try {
         const res = await fetch('/api/config');
         if (res.status !== 200) return;
         const data = await res.json();
         if (!data.cache) return;
+        _settingsLoopback = true;
         const el = document.getElementById('configFooter');
-        el.textContent = `Cache: ${data.cache.location} (${data.cache.used_mb} MB / ${data.cache.max_mb} MB, ${data.cache.entry_count} entries)  \u2022  STT: ${data.stt_host}  \u2022  LLM: ${data.llm_host}`;
+        const info = `Cache: ${data.cache.location} (${data.cache.used_mb} MB / ${data.cache.max_mb} MB, ${data.cache.entry_count} entries)  \u2022  STT: ${data.stt_host}  \u2022  LLM: ${data.llm_host}`;
+        el.innerHTML = esc(info) + `<button class="settings-link" onclick="openSettings()">Settings</button>`;
       } catch {}
     })();
+
+    async function openSettings() {
+      if (!_settingsLoopback) return;
+      const res = await fetch('/api/settings');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      const backdrop = document.createElement('div');
+      backdrop.className = 'modal-backdrop';
+      backdrop.id = 'settings-modal';
+      backdrop.innerHTML = `
+        <div class="modal" onclick="event.stopPropagation()">
+          <div class="modal-header">
+            <div class="modal-title">Settings</div>
+            <button class="modal-close" onclick="closeSettings()" aria-label="Close">\u2715</button>
+          </div>
+          <div class="modal-body">
+            <p class="hint">Edit the config file directly. Uses shell-style <code>KEY=VALUE</code> with bash interpolation: <code>\${VAR}</code> or <code>\${VAR:-default}</code>. Changes take effect on the next API call (within ~5s). <strong>Note:</strong> <code>cache_dir</code> and <code>cache_max_mb</code> require a server restart.</p>
+            <textarea class="modal-textarea" id="settings-textarea">${esc(data.content)}</textarea>
+          </div>
+          <div class="modal-footer">
+            <div class="modal-path">${esc(data.path)}</div>
+            <div class="modal-actions">
+              <button class="card-dl-btn card-btn-alt" onclick="closeSettings()">Cancel</button>
+              <button class="fetch-btn" style="padding:8px 18px;" onclick="saveSettings()">Save</button>
+            </div>
+          </div>
+        </div>`;
+      backdrop.onclick = closeSettings;
+      document.body.appendChild(backdrop);
+    }
+
+    function closeSettings() {
+      const el = document.getElementById('settings-modal');
+      if (el) el.remove();
+    }
+
+    async function saveSettings() {
+      const textarea = document.getElementById('settings-textarea');
+      if (!textarea) return;
+      const content = textarea.value;
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          alert('Save failed: ' + (err.error || res.statusText));
+          return;
+        }
+        closeSettings();
+        // Refresh the footer to reflect any changes
+        const cfgRes = await fetch('/api/config');
+        if (cfgRes.ok) {
+          const d = await cfgRes.json();
+          if (d.cache) {
+            const el = document.getElementById('configFooter');
+            const info = `Cache: ${d.cache.location} (${d.cache.used_mb} MB / ${d.cache.max_mb} MB, ${d.cache.entry_count} entries)  \u2022  STT: ${d.stt_host}  \u2022  LLM: ${d.llm_host}`;
+            el.innerHTML = esc(info) + `<button class="settings-link" onclick="openSettings()">Settings</button>`;
+          }
+        }
+      } catch (err) {
+        alert('Save failed: ' + err.message);
+      }
+    }
   </script>
 </body>
 </html>

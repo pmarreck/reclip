@@ -39,6 +39,12 @@ def parse_ytdlp_json(stdout):
     raise ValueError("yt-dlp returned no data")
 
 
+@app.before_request
+def _reload_config_if_needed():
+    """Hot-reload config.ini when it changes (throttled to every 5s)."""
+    cfg.maybe_reload()
+
+
 def _is_loopback(req):
     addr = req.remote_addr or ""
     return addr in ("127.0.0.1", "::1", "localhost")
@@ -574,6 +580,31 @@ def get_config():
         "stt_host": f"{stt_parsed.hostname}:{stt_parsed.port}",
         "llm_host": f"{llm_parsed.hostname}:{llm_parsed.port}",
     })
+
+
+@app.route("/api/settings", methods=["GET", "POST"])
+def settings_endpoint():
+    """Read or write the raw config.ini file. Loopback-only."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: settings editing is only available via loopback"}), 403
+
+    if request.method == "GET":
+        return jsonify({
+            "content": cfg.read_file(),
+            "path": cfg.config_path,
+        })
+
+    data = request.json or {}
+    content = data.get("content")
+    if content is None:
+        return jsonify({"error": "Missing 'content' field"}), 400
+
+    try:
+        cfg.write_file(content)
+    except OSError as e:
+        return jsonify({"error": f"Failed to write config: {e}"}), 500
+
+    return jsonify({"ok": True, "path": cfg.config_path})
 
 
 @app.route("/api/playlist", methods=["POST"])
