@@ -53,6 +53,28 @@
             echo "Run: python app.py"
           '';
         };
+
+        checks.test = pkgs.stdenv.mkDerivation {
+          name = "reclip-test";
+          src = ./.;
+
+          nativeBuildInputs = [ pythonEnv ];
+
+          dontBuild = true;
+
+          checkPhase = ''
+            export HOME=$TMPDIR
+            export RECLIP_CONFIG_DIR=$TMPDIR/reclip-config
+            python -m pytest tests/ -v
+          '';
+
+          doCheck = true;
+
+          installPhase = ''
+            mkdir -p $out
+            echo "tests passed" > $out/result
+          '';
+        };
       }
     );
 }

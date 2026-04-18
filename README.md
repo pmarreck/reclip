@@ -2,6 +2,7 @@
 
 A self-hosted, open-source video and audio downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, and 1000+ other sites — download as MP4 or MP3, **transcribe with Whisper, summarize, and translate using local LLMs**.
 
+[![Garnix](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fgarnix.io%2Fapi%2Fbadges%2Fpmarreck%2Freclip%3Fbranch%3Dmain)](https://garnix.io/repo/pmarreck/reclip)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
