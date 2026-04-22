@@ -1369,9 +1369,13 @@
 
     async function openSettings() {
       if (!_settingsLoopback) return;
-      const res = await fetch('/api/settings');
-      if (!res.ok) return;
-      const data = await res.json();
+      const [settingsRes, serviceRes] = await Promise.all([
+        fetch('/api/settings'),
+        fetch('/api/service'),
+      ]);
+      if (!settingsRes.ok) return;
+      const data = await settingsRes.json();
+      const svc = serviceRes.ok ? await serviceRes.json() : null;
 
       const backdrop = document.createElement('div');
       backdrop.className = 'modal-backdrop';
@@ -1385,6 +1389,7 @@
           <div class="modal-body">
             <p class="hint">Edit the config file directly. Uses shell-style <code>KEY=VALUE</code> with bash interpolation: <code>\${VAR}</code> or <code>\${VAR:-default}</code>. Changes take effect on the next API call (within ~5s). <strong>Note:</strong> <code>cache_dir</code> and <code>cache_max_mb</code> require a server restart.</p>
             <textarea class="modal-textarea" id="settings-textarea">${esc(data.content)}</textarea>
+            <div id="service-section"></div>
           </div>
           <div class="modal-footer">
             <div class="modal-path">${esc(data.path)}</div>
@@ -1396,6 +1401,65 @@
         </div>`;
       backdrop.onclick = closeSettings;
       document.body.appendChild(backdrop);
+      if (svc) renderServiceSection(svc);
+    }
+
+    function renderServiceSection(svc) {
+      const el = document.getElementById('service-section');
+      if (!el) return;
+      if (!svc.supported) {
+        el.innerHTML = `
+          <div style="margin-top:20px;padding-top:18px;border-top:1.5px solid var(--card-border);">
+            <div style="font-family:'Instrument Serif',serif;font-size:1.15rem;margin-bottom:6px;">Run as a Service</div>
+            <p class="hint" style="margin:0;">Service installation is not supported on <code>${esc(svc.platform)}</code> (only macOS and Linux).</p>
+          </div>`;
+        return;
+      }
+      const running = svc.running ? '<span style="color:var(--success);">&#9679; running</span>' : '<span style="color:var(--muted);">&#9675; not running</span>';
+      const installed = svc.installed ? 'installed' : 'not installed';
+      const actionBtn = svc.installed
+        ? `<button class="card-dl-btn card-btn-alt" onclick="serviceAction('uninstall')">Uninstall</button>`
+        : `<button class="card-dl-btn done" onclick="serviceAction('install')">Install &amp; Start</button>`;
+      el.innerHTML = `
+        <div style="margin-top:20px;padding-top:18px;border-top:1.5px solid var(--card-border);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div>
+              <div style="font-family:'Instrument Serif',serif;font-size:1.15rem;">Run as a Service</div>
+              <p class="hint" style="margin:4px 0 0 0;">
+                ${installed} &middot; ${running} &middot; <code>${esc(svc.platform)}</code>
+              </p>
+            </div>
+            <div>${actionBtn}</div>
+          </div>
+          ${svc.installed && svc.service_path ? `<p class="hint" style="margin-top:6px;font-size:0.6rem;"><code>${esc(svc.service_path)}</code></p>` : ''}
+          <p class="hint" style="margin-top:10px;font-size:0.6rem;line-height:1.5;">
+            Installing registers a user-level service (no root needed) that auto-starts on login and restarts on crash.
+            The current <code>RECLIP_*</code> environment and <code>PATH</code> are baked into the service file at install time.
+            Uninstall removes the service file and stops the running process.
+          </p>
+          <div id="service-msg" style="margin-top:8px;font-size:0.7rem;"></div>
+        </div>`;
+    }
+
+    async function serviceAction(action) {
+      const msg = document.getElementById('service-msg');
+      if (msg) msg.innerHTML = `<span class="card-status downloading"><span class="spin"></span> ${action === 'install' ? 'Installing' : 'Uninstalling'}...</span>`;
+      try {
+        const res = await fetch(`/api/service/${action}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+          if (msg) msg.innerHTML = `<span style="color:var(--error);">${esc(data.error || res.statusText)}</span>`;
+          return;
+        }
+        // Refresh status
+        const statusRes = await fetch('/api/service');
+        const statusData = await statusRes.json();
+        renderServiceSection(statusData);
+        const freshMsg = document.getElementById('service-msg');
+        if (freshMsg) freshMsg.innerHTML = `<span style="color:var(--success);">Service ${action}ed successfully.</span>`;
+      } catch (err) {
+        if (msg) msg.innerHTML = `<span style="color:var(--error);">${esc(err.message)}</span>`;
+      }
     }
 
     function closeSettings() {

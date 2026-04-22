@@ -34,7 +34,7 @@
 
           installPhase = ''
             mkdir -p $out/share/reclip $out/bin
-            cp -r app.py config.py cache.py llm_client.py templates static assets $out/share/reclip/
+            cp -r app.py config.py cache.py llm_client.py service.py templates static assets $out/share/reclip/
             makeWrapper ${pythonEnv}/bin/python $out/bin/reclip \
               --add-flags "$out/share/reclip/app.py" \
               --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp ]}

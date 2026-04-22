@@ -12,6 +12,7 @@ from config import load_config
 from cache import Cache
 import hashlib
 from llm_client import transcribe as llm_transcribe, chat_completion, text_to_speech, LLMError
+from service import ServiceManager
 
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
@@ -605,6 +606,47 @@ def settings_endpoint():
         return jsonify({"error": f"Failed to write config: {e}"}), 500
 
     return jsonify({"ok": True, "path": cfg.config_path})
+
+
+@app.route("/api/service", methods=["GET"])
+def service_status():
+    """Return service install/run status. Loopback-only."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: service management is only available via loopback"}), 403
+    mgr = ServiceManager()
+    return jsonify(mgr.status())
+
+
+@app.route("/api/service/install", methods=["POST"])
+def service_install():
+    """Install and start the service. Loopback-only. Idempotent."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: service management is only available via loopback"}), 403
+    mgr = ServiceManager()
+    if not mgr.supported():
+        return jsonify({"error": f"Not supported on {mgr.platform}"}), 400
+    try:
+        mgr.install()
+    except subprocess.CalledProcessError as e:
+        return jsonify({"error": f"launchctl/systemctl failed: {(e.stderr or e.stdout or str(e)).strip()}"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, **mgr.status()})
+
+
+@app.route("/api/service/uninstall", methods=["POST"])
+def service_uninstall():
+    """Stop and remove the service. Loopback-only. Idempotent."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: service management is only available via loopback"}), 403
+    mgr = ServiceManager()
+    if not mgr.supported():
+        return jsonify({"error": f"Not supported on {mgr.platform}"}), 400
+    try:
+        mgr.uninstall()
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, **mgr.status()})
 
 
 @app.route("/api/playlist", methods=["POST"])

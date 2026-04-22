@@ -529,3 +529,24 @@ class TestSettingsEndpoint:
         # Simulate non-loopback remote addr
         resp = client.get("/api/settings", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
         assert resp.status_code == 403
+
+
+class TestServiceEndpoints:
+    def test_status_returns_shape(self, client):
+        resp = client.get("/api/service")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for key in ("platform", "supported", "installed", "running", "service_path"):
+            assert key in data
+
+    def test_status_loopback_gated(self, client):
+        resp = client.get("/api/service", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403
+
+    def test_install_loopback_gated(self, client):
+        resp = client.post("/api/service/install", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403
+
+    def test_uninstall_loopback_gated(self, client):
+        resp = client.post("/api/service/uninstall", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403
