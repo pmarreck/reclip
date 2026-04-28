@@ -1,5 +1,6 @@
 import io
 import os
+import sys
 import uuid
 import glob
 import json
@@ -1180,6 +1181,16 @@ def text_download(job_id):
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8899))
-    host = os.environ.get("HOST", "127.0.0.1")
+    # Env vars (HOST/PORT) win for ad-hoc launches; otherwise pull from config.ini.
+    host = os.environ.get("HOST") or cfg.get("host", "127.0.0.1")
+    try:
+        port = int(os.environ.get("PORT") or cfg.get("port", 8899))
+    except (TypeError, ValueError):
+        port = 8899
+    if host not in ("127.0.0.1", "::1", "localhost"):
+        sys.stderr.write(
+            f"\x1b[33m[reclip+] Binding to {host}:{port} — reachable from other "
+            f"machines. Settings UI stays loopback-gated, but transcription/"
+            f"summarization/TTS endpoints are exposed.\x1b[0m\n"
+        )
     app.run(host=host, port=port)

@@ -52,6 +52,19 @@ DEFAULT_CONFIG_CONTENT = """# ReClip+ configuration
 # falls back to default when VAR is unset or empty. Nesting is supported, e.g.
 # ${SPECIFIC_KEY:-${COMMON_KEY}}.
 
+# --- Server bind (requires restart to take effect) ---
+# RECLIP_HOST controls which interface the web UI binds to.
+#   127.0.0.1 (default): loopback only — safest, only accessible from this machine
+#   0.0.0.0:             all interfaces — reachable from LAN, Tailscale, anything
+#                        that can route to this machine. Settings UI stays
+#                        loopback-gated, but transcription/summarization/TTS
+#                        endpoints become reachable. Only enable on trusted
+#                        networks (e.g. Tailscale-only LAN).
+#   <specific IP>:       bind to one interface (e.g. your Tailscale IP from
+#                        `tailscale ip -4`) to expose only over that network.
+RECLIP_HOST=${RECLIP_HOST:-127.0.0.1}
+RECLIP_PORT=${RECLIP_PORT:-8899}
+
 # --- Cache (requires restart to take effect) ---
 RECLIP_CACHE_DIR=${RECLIP_CACHE_DIR}
 RECLIP_CACHE_MAX_MB=${RECLIP_CACHE_MAX_MB:-1024}
@@ -252,8 +265,14 @@ class Config:
 			cache_max_mb = int(get("RECLIP_CACHE_MAX_MB", "1024"))
 		except ValueError:
 			cache_max_mb = 1024
+		try:
+			host_port = int(get("RECLIP_PORT", "8899"))
+		except ValueError:
+			host_port = 8899
 
 		self._values = {
+			"host": get("RECLIP_HOST", "127.0.0.1"),
+			"port": host_port,
 			"cache_dir": os.path.expanduser(cache_dir),
 			"cache_max_mb": cache_max_mb,
 			"stt_url": get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
