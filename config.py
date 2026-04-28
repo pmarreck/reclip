@@ -97,7 +97,7 @@ RECLIP_COUNTERARGUE_MODEL=${RECLIP_COUNTERARGUE_MODEL:-gemma4-heretical-mlx-8bit
 # --- Text-to-speech ---
 RECLIP_TTS_URL=${RECLIP_TTS_URL:-http://localhost:8000/v1/audio/speech}
 RECLIP_TTS_API_KEY=${RECLIP_TTS_API_KEY:-${RECLIP_API_KEY}}
-RECLIP_TTS_MODEL=${RECLIP_TTS_MODEL:-Qwen3-TTS-12Hz-1.7B-Base-8bit}
+RECLIP_TTS_MODEL=${RECLIP_TTS_MODEL:-Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit}
 # RECLIP_TTS_VOICE may be:
 #   - empty: auto-clone from each video's own audio (middle 7s + STT)
 #   - a voice description string: routed via the OpenAI `voice` field. With
@@ -274,7 +274,7 @@ class Config:
 			"counterargue_prompt": get("RECLIP_COUNTERARGUE_PROMPT", DEFAULT_COUNTERARGUE_PROMPT),
 			"tts_url": get("RECLIP_TTS_URL", "http://localhost:8000/v1/audio/speech"),
 			"tts_api_key": get("RECLIP_TTS_API_KEY"),
-			"tts_model": get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-Base-8bit"),
+			"tts_model": get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"),
 			"tts_voice": get("RECLIP_TTS_VOICE", "warm feminine voice with a soft sultry tone, gentle and engaging"),
 			"tts_voice_text": get("RECLIP_TTS_VOICE_TEXT"),
 		}
