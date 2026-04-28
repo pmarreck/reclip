@@ -750,6 +750,25 @@ def counterargue_endpoint():
     return jsonify({"job_id": job_id})
 
 
+def _clean_text_for_tts(text):
+    """Strip markdown that TTS reads literally.
+
+    The chat models we use for summaries emit markdown; Qwen3-TTS will read
+    the asterisks aloud as "asterisk" or pause oddly. Strip bold markers and
+    convert leading-bullet asterisks to hyphens (which Qwen3-TTS handles
+    cleanly as a list item beat).
+    """
+    import re
+    # Remove all double-asterisks (bold/strong markers)
+    text = text.replace("**", "")
+    # Convert bullet-style single-asterisks at start-of-line (with optional
+    # leading whitespace) to hyphens. Single asterisks inside text (italics
+    # like *foo*) are left alone since they don't usually disrupt TTS as
+    # much and risk false positives if we strip them globally.
+    text = re.sub(r'(?m)^(\s*)\*(\s)', r'\1-\2', text)
+    return text
+
+
 def _chunk_text_for_tts(text, max_chars=300):
     """Split text into TTS-friendly chunks at paragraph/sentence boundaries.
 
@@ -760,6 +779,8 @@ def _chunk_text_for_tts(text, max_chars=300):
     # Strip metadata header if present
     if "=== Transcript ===" in text:
         text = text.split("=== Transcript ===", 1)[1].strip()
+    # Clean markdown (asterisks etc.) before chunking
+    text = _clean_text_for_tts(text)
 
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks = []
@@ -891,20 +912,35 @@ def _run_speak(job_id, url, source, voice_override):
             return
 
         # Chunk long text to avoid Qwen3-TTS voice drift on >300 chars
-        # (see github.com/QwenLM/Qwen3-TTS issues #80, #239)
+        # (see github.com/QwenLM/Qwen3-TTS issues #80, #239).
+        # Voice consistency across chunks: anchor chunks 2+ to the FIRST
+        # chunk's generated audio (saved to cache as tts-anchor.wav). The
+        # original `voice` (middle 10s of source) is non-deterministic when
+        # used directly across multiple calls — each call rolls a different
+        # voice from its sample-space. Pinning chunks 2+ to chunk 1's audio
+        # makes the whole output sound like one speaker.
         chunks = _chunk_text_for_tts(text, max_chars=300)
         chunk_wavs = []
+        anchor_path = None
         for i, chunk in enumerate(chunks):
             job["progress"] = f"chunk {i+1}/{len(chunks)}"
+            current_voice = anchor_path if anchor_path else voice
             chunk_wav = text_to_speech(
                 url=cfg["tts_url"],
                 model=cfg["tts_model"],
                 text=chunk,
                 api_key=cfg["tts_api_key"],
-                voice=voice,
+                voice=current_voice,
                 api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
             )
             chunk_wavs.append(chunk_wav)
+
+            # After the first chunk, persist it and use it as the voice
+            # reference for all subsequent chunks.
+            if i == 0 and len(chunks) > 1:
+                anchor_path = cache.entry_path(url, "tts-anchor.wav")
+                with open(anchor_path, "wb") as f:
+                    f.write(chunk_wav)
 
         # Concatenate WAV chunks into single output
         out_path = cache.entry_path(url, tts_filename)

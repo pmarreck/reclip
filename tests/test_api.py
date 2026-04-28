@@ -531,6 +531,69 @@ class TestSettingsEndpoint:
         assert resp.status_code == 403
 
 
+class TestTTSTextCleaning:
+    def test_strips_double_asterisks(self):
+        from app import _clean_text_for_tts
+        assert _clean_text_for_tts("This is **bold** text") == "This is bold text"
+        assert _clean_text_for_tts("**Heading**") == "Heading"
+
+    def test_converts_leading_bullet_asterisk_to_hyphen(self):
+        from app import _clean_text_for_tts
+        result = _clean_text_for_tts("* first item\n* second item")
+        assert result == "- first item\n- second item"
+
+    def test_converts_indented_bullet_asterisk_to_hyphen(self):
+        from app import _clean_text_for_tts
+        result = _clean_text_for_tts("    * nested item")
+        assert result == "    - nested item"
+
+    def test_preserves_inline_asterisks(self):
+        from app import _clean_text_for_tts
+        # Single asterisk mid-sentence should be left alone (italic markers
+        # are less disruptive to TTS than bullet/bold and could be false
+        # positives if stripped indiscriminately).
+        result = _clean_text_for_tts("a *b* c")
+        assert result == "a *b* c"
+
+    def test_combined(self):
+        from app import _clean_text_for_tts
+        src = "**Summary**\n\n* first\n* second with **bold** inside"
+        out = _clean_text_for_tts(src)
+        assert "**" not in out
+        assert "- first" in out
+        assert "- second with bold inside" in out
+
+
+class TestTTSChunking:
+    def test_short_text_single_chunk(self):
+        from app import _chunk_text_for_tts
+        chunks = _chunk_text_for_tts("Just a short sentence.")
+        assert chunks == ["Just a short sentence."]
+
+    def test_strips_metadata_header(self):
+        from app import _chunk_text_for_tts
+        text = "=== Video Metadata ===\nTitle: Foo\n=== Transcript ===\n\nHello world."
+        chunks = _chunk_text_for_tts(text)
+        assert len(chunks) == 1
+        assert "Metadata" not in chunks[0]
+        assert chunks[0] == "Hello world."
+
+    def test_cleans_markdown_before_chunking(self):
+        from app import _chunk_text_for_tts
+        chunks = _chunk_text_for_tts("**Bold** then * bullet")
+        joined = "\n".join(chunks)
+        assert "**" not in joined
+
+    def test_long_paragraph_splits_at_sentences(self):
+        from app import _chunk_text_for_tts
+        sentences = ["This is sentence number {}.".format(i) for i in range(20)]
+        text = " ".join(sentences)
+        chunks = _chunk_text_for_tts(text, max_chars=80)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert len(c) <= 80
+
+
 class TestServiceEndpoints:
     def test_status_returns_shape(self, client):
         resp = client.get("/api/service")
