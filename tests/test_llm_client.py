@@ -75,6 +75,70 @@ class TestTranscribe:
 				prompt="",
 			)
 
+	@responses.activate
+	def test_processor_not_found_auto_recovery(self, tmp_path):
+		"""oMLX 'Processor not found' triggers unload + retry, then succeeds."""
+		from llm_client import transcribe
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"audio data")
+
+		# First call: 500 with the recoverable error
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"error": {"message": "Processor not found. Make sure the model was loaded with a HuggingFace processor."}},
+			status=500,
+		)
+		# Unload call
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/models/whisper/unload",
+			json={"status": "ok"},
+			status=200,
+		)
+		# Retry call: succeeds
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "Hello after retry", "language": "en"},
+			status=200,
+		)
+
+		result = transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper",
+			api_key="key",
+			prompt="",
+		)
+		assert result["text"] == "Hello after retry"
+		urls = [c.request.url for c in responses.calls]
+		assert any("/v1/models/whisper/unload" in u for u in urls)
+
+	@responses.activate
+	def test_non_recoverable_error_no_retry(self, tmp_path):
+		"""Other errors should not trigger the unload-and-retry path."""
+		from llm_client import transcribe, LLMError
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"error": {"message": "Some other error"}},
+			status=500,
+		)
+
+		with pytest.raises(LLMError, match="Some other error"):
+			transcribe(
+				audio_path=str(audio_file),
+				url="http://localhost:8000/v1/audio/transcriptions",
+				model="whisper",
+				api_key="",
+				prompt="",
+			)
+		assert len(responses.calls) == 1
+
 
 class TestChatCompletion:
 	@responses.activate

@@ -99,7 +99,7 @@ RECLIP_API_KEY=your_key ./run
 | `RECLIP_CACHE_MAX_MB` | `1024` | Max cache size in MB (LRU eviction) |
 | `RECLIP_STT_URL` | `http://localhost:8000/v1/audio/transcriptions` | Speech-to-text endpoint |
 | `RECLIP_STT_API_KEY` | `$RECLIP_API_KEY` | STT-specific API key |
-| `RECLIP_STT_MODEL` | `whisper-large-v3-turbo-8bit` | Whisper model name |
+| `RECLIP_STT_MODEL` | `whisper-large-v3-fp16` | Whisper model name (see [STT model notes](#stt-model-notes)) |
 | `RECLIP_STT_PROMPT` | (empty) | Optional STT priming prompt |
 | `RECLIP_SUMMARIZE_URL` | `http://localhost:8000/v1/chat/completions` | Summarization endpoint |
 | `RECLIP_SUMMARIZE_API_KEY` | `$RECLIP_API_KEY` | Summarization-specific API key |
@@ -118,6 +118,33 @@ RECLIP_API_KEY=your_key ./run
 | Ollama | 11434 | None |
 | LM Studio | 1234 | None |
 | OpenAI | api.openai.com | Bearer token |
+
+### STT model notes
+
+The default `RECLIP_STT_MODEL` is `whisper-large-v3-fp16` because it ships with the HuggingFace processor/feature-extractor configuration that oMLX needs to run transcription. Other tested options on oMLX:
+
+| Model | Status | Notes |
+|-------|--------|-------|
+| `mlx-community/whisper-large-v3-fp16` | ✅ Recommended | ~3 GB, full precision, HF processor included. Default. |
+| `mlx-community/whisper-large-v3-8bit` | ✅ Works | ~860 MB, quantized non-turbo. HF processor included. |
+| `mlx-community/whisper-large-v3-turbo-8bit` | ⚠️ Avoid on current oMLX | Smaller (~860 MB) but the repo is missing/has stripped the HuggingFace processor files. oMLX 0.3.8.dev1 throws `Processor not found. Make sure the model was loaded with a HuggingFace processor.` even after manually copying `preprocessor_config.json`, `tokenizer.json`, `tokenizer_config.json`, etc. from upstream `openai/whisper-large-v3-turbo`. The auto-recovery in ReClip+ unloads and retries once, but the underlying load still fails. May be fixed in a future oMLX release — until then, prefer `fp16` or `8bit`. |
+| `mlx-community/whisper-large-v3-mlx` | ❌ Doesn't load | Ships `weights.npz` instead of `model.safetensors`; oMLX's model discovery ignores it. |
+
+ReClip+ has a workaround for the oMLX "stale processor" caching bug: when it sees `Processor not found` from `/v1/audio/transcriptions`, it POSTs to `/v1/models/{model}/unload` and retries once. That fix handles transient stale-state cases, but won't help when the underlying repo genuinely lacks the processor files (which is the turbo-8bit situation above).
+
+#### oMLX 0.3.x: WhisperProcessor fails for ALL models
+
+oMLX 0.3.8rc1's bundle pins `transformers 5.x` against `mistral_common 1.9.x`. `transformers/tokenization_mistral_common.py` imports `ReasoningEffort` (added in `mistral_common 1.10`), and `WhisperProcessor.from_pretrained()` walks the transformers module map during processor discovery, so it hits the broken import and silently falls back to `_processor=None`. oMLX then misreports this as "missing `preprocessor_config.json`" — even on models with complete HF processor files.
+
+If you see that error on oMLX 0.3.x, run:
+
+```bash
+nix run .#fix-omlx        # apply the patch
+nix run .#fix-omlx -- --check    # report patched/unpatched
+nix run .#fix-omlx -- --revert   # restore from .reclip-backup
+```
+
+Or invoke the script directly without Nix: `./scripts/fix-omlx-stt.sh`. It idempotently patches `oMLX.app`'s bundled `tokenization_mistral_common.py` to make the `ReasoningEffort` import optional. Restart oMLX after patching. Upstream fix will be a one-line dep bump in oMLX's `pyproject.toml` — see `docs/upstream/jundot-omlx-issue-draft.md` for the issue body.
 
 ## Usage
 

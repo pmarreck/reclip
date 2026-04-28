@@ -53,7 +53,7 @@ def test_stt_defaults():
 	cfg = load_config()
 	assert cfg["stt_url"] == "http://localhost:8000/v1/audio/transcriptions"
 	assert cfg["stt_api_key"] == ""
-	assert cfg["stt_model"] == "whisper-large-v3-turbo-8bit"
+	assert cfg["stt_model"] == "whisper-large-v3-fp16"
 	assert cfg["stt_prompt"] == ""
 
 
@@ -154,7 +154,7 @@ class TestConfigFile:
 	def test_first_run_uses_defaults(self, isolated_config_dir):
 		from config import Config
 		cfg = Config()
-		assert cfg["stt_model"] == "whisper-large-v3-turbo-8bit"
+		assert cfg["stt_model"] == "whisper-large-v3-fp16"
 
 	def test_file_override_takes_precedence(self, isolated_config_dir, monkeypatch):
 		monkeypatch.delenv("RECLIP_STT_MODEL", raising=False)
@@ -170,7 +170,7 @@ class TestHotReload:
 		monkeypatch.delenv("RECLIP_STT_MODEL", raising=False)
 		from config import Config
 		cfg = Config()
-		assert cfg["stt_model"] == "whisper-large-v3-turbo-8bit"
+		assert cfg["stt_model"] == "whisper-large-v3-fp16"
 
 		# Write a new value and bump mtime far past the throttle window
 		(isolated_config_dir / "config.ini").write_text("RECLIP_STT_MODEL=updated-model\n")
@@ -189,7 +189,7 @@ class TestHotReload:
 		cfg._last_check = time.time()  # just checked
 		(isolated_config_dir / "config.ini").write_text("RECLIP_STT_MODEL=should-not-load\n")
 		cfg.maybe_reload()  # should be skipped
-		assert cfg["stt_model"] == "whisper-large-v3-turbo-8bit"
+		assert cfg["stt_model"] == "whisper-large-v3-fp16"
 
 	def test_write_file_reloads_immediately(self, isolated_config_dir, monkeypatch):
 		monkeypatch.delenv("RECLIP_STT_MODEL", raising=False)

@@ -1,4 +1,35 @@
 #!/usr/bin/env bash
+# ReClip+ test runner.
+#   ./test                   # unit + endpoint tests (fast, hermetic, default)
+#   ./test --integration     # also run live integration tests against real
+#                              yt-dlp + STT/LLM/TTS server (requires reachable
+#                              services and an API key in env or config.ini)
+#   ./test --integration-only
+#   Any other args are forwarded to pytest.
 set -uo pipefail
 cd "$(dirname "$0")"
-exec nix develop -c python -m pytest tests/ -v "$@"
+
+mode="unit"
+extra=()
+for arg in "$@"; do
+	case "$arg" in
+		--integration)         mode="all" ;;
+		--integration-only)    mode="integration" ;;
+		*) extra+=("$arg") ;;
+	esac
+done
+
+case "$mode" in
+	unit)
+		exec nix develop -c python -m pytest \
+			--ignore=tests/integration tests/ -v "${extra[@]}"
+		;;
+	integration)
+		export RECLIP_INTEGRATION=1
+		exec nix develop -c python -m pytest tests/integration -v "${extra[@]}"
+		;;
+	all)
+		export RECLIP_INTEGRATION=1
+		exec nix develop -c python -m pytest tests/ -v "${extra[@]}"
+		;;
+esac

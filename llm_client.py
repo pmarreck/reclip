@@ -1,16 +1,52 @@
+import logging
+import re
+import sys
 import requests
+from urllib.parse import urlparse
+
+
+_logger = logging.getLogger("reclip.llm_client")
+if not _logger.handlers:
+	_h = logging.StreamHandler(sys.stderr)
+	_h.setFormatter(logging.Formatter("[reclip] %(message)s"))
+	_logger.addHandler(_h)
+	_logger.setLevel(logging.INFO)
 
 
 class LLMError(Exception):
 	pass
 
 
-def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
-	"""Post an audio file for transcription via multipart form upload.
+# oMLX-specific transient errors that resolve after unloading the model
+_OMLX_RECOVERABLE_PATTERNS = (
+	re.compile(r"processor not found", re.IGNORECASE),
+)
 
-	Sends file + model as multipart/form-data to any OpenAI-compatible
-	/audio/transcriptions endpoint. Returns dict with text/language/duration.
+
+def _try_unload_omlx_model(api_url, model, api_key):
+	"""Best-effort POST to oMLX's /v1/models/{model}/unload to clear stale state.
+
+	Derived from any /v1/* endpoint URL. Silently no-ops on non-oMLX servers
+	or if the request fails — this is a recovery hook, not a hard requirement.
 	"""
+	try:
+		parsed = urlparse(api_url)
+		base = f"{parsed.scheme}://{parsed.netloc}"
+		unload_url = f"{base}/v1/models/{model}/unload"
+		headers = {}
+		if api_key:
+			headers["Authorization"] = f"Bearer {api_key}"
+		requests.post(unload_url, headers=headers, timeout=10)
+	except Exception:
+		pass
+
+
+def _is_recoverable(error_msg):
+	return any(p.search(error_msg) for p in _OMLX_RECOVERABLE_PATTERNS)
+
+
+def _do_transcribe(audio_path, url, model, api_key, prompt):
+	"""Single transcription request. Returns (status_code, json_or_text_dict)."""
 	headers = {}
 	if api_key:
 		headers["Authorization"] = f"Bearer {api_key}"
@@ -20,8 +56,20 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 		data = {"model": model}
 		if prompt:
 			data["prompt"] = prompt
-
 		resp = requests.post(url, headers=headers, files=files, data=data, timeout=600)
+	return resp
+
+
+def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
+	"""Post an audio file for transcription via multipart form upload.
+
+	Sends file + model as multipart/form-data to any OpenAI-compatible
+	/audio/transcriptions endpoint. Returns dict with text/language/duration.
+
+	Auto-recovers from oMLX's "Processor not found" stale-load bug by
+	unloading the model and retrying once.
+	"""
+	resp = _do_transcribe(audio_path, url, model, api_key, prompt)
 
 	if resp.status_code >= 400:
 		error_msg = "Transcription failed"
@@ -31,6 +79,32 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 				error_msg = body["error"].get("message", str(body["error"]))
 		except (ValueError, KeyError):
 			error_msg = resp.text
+
+		# Auto-recover: oMLX caches "no processor" state until model is reloaded.
+		# Unload it and try once more.
+		if _is_recoverable(error_msg):
+			_logger.warning(
+				"STT returned %r — applying oMLX workaround: unloading %s and retrying",
+				error_msg, model,
+			)
+			_try_unload_omlx_model(url, model, api_key)
+			resp = _do_transcribe(audio_path, url, model, api_key, prompt)
+			if resp.status_code < 400:
+				_logger.info("STT auto-recovery succeeded after model reload")
+				result = resp.json()
+				return {
+					"text": result.get("text", ""),
+					"language": result.get("language"),
+					"duration": result.get("duration"),
+				}
+			# Still failing — re-extract the error message
+			try:
+				body = resp.json()
+				if "error" in body:
+					error_msg = body["error"].get("message", str(body["error"]))
+			except (ValueError, KeyError):
+				error_msg = resp.text
+
 		if resp.status_code in (401, 403) and api_key_hint:
 			error_msg += f" (set {api_key_hint})"
 		raise LLMError(error_msg)

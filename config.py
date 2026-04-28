@@ -60,9 +60,19 @@ RECLIP_CACHE_MAX_MB=${RECLIP_CACHE_MAX_MB:-1024}
 RECLIP_API_KEY=${RECLIP_API_KEY}
 
 # --- Speech-to-text (transcription) ---
+# whisper-large-v3-fp16 is the recommended default for oMLX Server. Other
+# tested options:
+#   whisper-large-v3-fp16          -- ~3GB, full precision, HF processor included
+#   whisper-large-v3-8bit          -- ~860MB, quantized but HF processor included
+#   whisper-large-v3-turbo-8bit    -- AVOID with current oMLX (0.3.8.dev1+):
+#                                     missing/unrecognized HuggingFace processor
+#                                     files cause "Processor not found" errors
+#                                     even after manually adding the upstream
+#                                     preprocessor_config.json/tokenizer.json.
+#   whisper-large-v3-mlx (.npz)    -- AVOID: oMLX needs safetensors, not .npz
 RECLIP_STT_URL=${RECLIP_STT_URL:-http://localhost:8000/v1/audio/transcriptions}
 RECLIP_STT_API_KEY=${RECLIP_STT_API_KEY:-${RECLIP_API_KEY}}
-RECLIP_STT_MODEL=${RECLIP_STT_MODEL:-whisper-large-v3-turbo-8bit}
+RECLIP_STT_MODEL=${RECLIP_STT_MODEL:-whisper-large-v3-fp16}
 RECLIP_STT_PROMPT=${RECLIP_STT_PROMPT}
 
 # --- Summarization ---
@@ -237,7 +247,7 @@ class Config:
 			"cache_max_mb": cache_max_mb,
 			"stt_url": get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
 			"stt_api_key": get("RECLIP_STT_API_KEY"),
-			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-turbo-8bit"),
+			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-fp16"),
 			"stt_prompt": get("RECLIP_STT_PROMPT"),
 			"summarize_url": get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions"),
 			"summarize_api_key": get("RECLIP_SUMMARIZE_API_KEY"),

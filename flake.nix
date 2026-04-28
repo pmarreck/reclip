@@ -75,6 +75,23 @@
             echo "tests passed" > $out/result
           '';
         };
+
+        # Idempotently patch a locally-installed oMLX.app so its bundled
+        # transformers can construct WhisperProcessor (works around a
+        # mistral_common <1.10 vs transformers 5.x version mismatch in the
+        # oMLX 0.3.x bundle). Run with: `nix run .#fix-omlx`
+        # See scripts/fix-omlx-stt.sh for the full explanation + revert/check
+        # modes. Upstream tracking issue: jundot/omlx (TBD).
+        apps.fix-omlx = {
+          type = "app";
+          meta = {
+            description = "Patch a locally-installed oMLX.app so STT (Whisper) works";
+          };
+          program = toString (pkgs.writeShellScript "fix-omlx" ''
+            export PATH="${pkgs.python312}/bin:$PATH"
+            exec ${./scripts/fix-omlx-stt.sh} "$@"
+          '');
+        };
       }
     );
 }
