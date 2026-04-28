@@ -10,10 +10,14 @@ import time
 from flask import Flask, request, jsonify, send_file, render_template, Response
 
 from config import load_config
-from cache import Cache
+from cache import Cache, cache_key
 import hashlib
+import zipfile
+import mimetypes
 from llm_client import transcribe as llm_transcribe, chat_completion, text_to_speech, LLMError
 from service import ServiceManager
+import media_extractor
+from media_extractor import classify_url
 
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
@@ -398,12 +402,131 @@ def index():
     return render_template("index.html")
 
 
+def _info_images(url):
+    """Fast metadata-only path for image-host URLs.
+
+    Runs ONLY gallery-dl --dump-json (no download). Returns CDN URLs the
+    frontend can render directly via <img src=...>. Actual cached download
+    happens lazily in /api/download-all/<hash> when the user clicks save.
+    Keeping this synchronous-but-fast (<10s typical) avoids tying up the
+    request thread for the full carousel download (30-60s).
+    """
+    try:
+        items = media_extractor.dump_images(
+            url,
+            cookies=cfg.get("gallery_dl_cookies") or None,
+            cookies_from_browser=cfg.get("gallery_dl_browser") or None,
+            timeout=30,
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 400
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Timed out fetching image metadata"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+    h = cache_key(url)
+    out = []
+    for it in items:
+        cdn = it.get("url") or ""
+        if not cdn:
+            continue
+        out.append({
+            "filename": it.get("filename") or "",
+            "url": cdn,
+            "width": it.get("width"),
+            "height": it.get("height"),
+        })
+
+    cache._write_meta(url, {"url": url, "kind": "images", "item_count": len(out)})
+    return jsonify({"kind": "images", "items": out, "entry_hash": h})
+
+
+@app.route("/media/<entry_hash>/<path:filename>")
+def serve_media(entry_hash, filename):
+    """Serve a cached image/video file from a per-URL cache entry.
+
+    Path is `<cache>/<entry_hash>/media/<filename>`. Path traversal is
+    blocked by rejecting any filename that escapes the media subdirectory.
+    """
+    if not entry_hash or "/" in entry_hash or ".." in entry_hash:
+        return jsonify({"error": "Bad request"}), 400
+    base = os.path.realpath(os.path.join(cache.cache_dir, entry_hash, "media"))
+    target = os.path.realpath(os.path.join(base, filename))
+    if not target.startswith(base + os.sep) and target != base:
+        return jsonify({"error": "Bad request"}), 400
+    if not os.path.isfile(target):
+        return jsonify({"error": "Not found"}), 404
+    mime, _ = mimetypes.guess_type(target)
+    return send_file(target, mimetype=mime or "application/octet-stream")
+
+
+@app.route("/api/download-all/<entry_hash>")
+def download_all(entry_hash):
+    """Stream a zip of every file under <entry>/media/ for the given hash.
+
+    If the media dir is empty (because /api/info now only fetches metadata,
+    not bytes), trigger gallery-dl on demand via the URL stored in meta.json.
+    """
+    if not entry_hash or "/" in entry_hash or ".." in entry_hash:
+        return jsonify({"error": "Bad request"}), 400
+    entry_dir = os.path.realpath(os.path.join(cache.cache_dir, entry_hash))
+    media_dir = os.path.join(entry_dir, "media")
+
+    has_files = os.path.isdir(media_dir) and any(
+        os.path.isfile(os.path.join(media_dir, f)) for f in os.listdir(media_dir)
+    )
+    if not has_files:
+        meta_path = os.path.join(entry_dir, "meta.json")
+        if not os.path.isfile(meta_path):
+            return jsonify({"error": "Not found"}), 404
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return jsonify({"error": "Cache metadata unreadable"}), 500
+        url = meta.get("url", "")
+        if not url:
+            return jsonify({"error": "Cache entry has no URL"}), 400
+        os.makedirs(media_dir, exist_ok=True)
+        try:
+            media_extractor.fetch_images(
+                url,
+                media_dir,
+                cookies=cfg.get("gallery_dl_cookies") or None,
+                cookies_from_browser=cfg.get("gallery_dl_browser") or None,
+                timeout=180,
+            )
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 400
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in sorted(os.listdir(media_dir)):
+            p = os.path.join(media_dir, name)
+            if os.path.isfile(p):
+                zf.write(p, arcname=name)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=f"{entry_hash[:10]}.zip",
+    )
+
+
 @app.route("/api/info", methods=["POST"])
 def get_info():
     data = request.json
     url = data.get("url", "").strip()
     if not url:
         return jsonify({"error": "No URL provided"}), 400
+
+    # Route image-heavy social hosts (Instagram, Threads, etc.) through
+    # gallery-dl rather than yt-dlp. Carousels, posts, and Reels-with-poster
+    # all return as kind=images for the frontend grid view.
+    if classify_url(url) == "images":
+        return _info_images(url)
 
     cmd = ["yt-dlp", "--no-playlist", "-j", url]
     try:
@@ -1193,4 +1316,12 @@ if __name__ == "__main__":
             f"machines. Settings UI stays loopback-gated, but transcription/"
             f"summarization/TTS endpoints are exposed.\x1b[0m\n"
         )
+        if cfg.get("gallery_dl_browser"):
+            sys.stderr.write(
+                f"\x1b[31m[reclip+] WARNING: gallery-dl is set to extract cookies "
+                f"from {cfg.get('gallery_dl_browser')}. Anyone who can reach "
+                f"{host}:{port} can trigger image fetches that ride your session "
+                f"cookies. Set RECLIP_GALLERY_DL_BROWSER='' in config.ini to "
+                f"disable, or pin RECLIP_HOST back to 127.0.0.1.\x1b[0m\n"
+            )
     app.run(host=host, port=port)

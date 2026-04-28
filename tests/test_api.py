@@ -666,3 +666,129 @@ class TestServiceEndpoints:
     def test_uninstall_loopback_gated(self, client):
         resp = client.post("/api/service/uninstall", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
         assert resp.status_code == 403
+
+
+class TestImageInfoFlow:
+    """When /api/info gets an image-host URL, it should route to gallery-dl
+    and return kind=images plus an items list with locally-served URLs.
+    """
+
+    def test_info_for_instagram_returns_kind_images(self, client, tmp_cache, monkeypatch):
+        """/api/info uses dump_images (metadata-only) and returns CDN URLs
+        directly, so the frontend can render them without waiting on a full
+        cache download. Cached download happens lazily via /api/download-all."""
+        import app
+        import media_extractor
+
+        url = "https://www.instagram.com/p/dummytest/"
+
+        def fake_dump_images(target_url, **kwargs):
+            return [
+                {"filename": "img1.jpg", "url": "https://cdn/img1.jpg", "width": 1080, "height": 1080},
+                {"filename": "img2.jpg", "url": "https://cdn/img2.jpg", "width": 1080, "height": 1350},
+            ]
+
+        monkeypatch.setattr(media_extractor, "dump_images", fake_dump_images)
+        if hasattr(app, "dump_images"):
+            monkeypatch.setattr(app, "dump_images", fake_dump_images)
+
+        resp = client.post("/api/info", json={"url": url})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data.get("kind") == "images", data
+        items = data.get("items") or []
+        assert len(items) == 2
+        # Each item should expose a CDN URL the browser can render directly
+        for it in items:
+            assert it.get("filename")
+            assert it.get("url", "").startswith("https://cdn/")
+
+    def test_info_for_youtube_keeps_video_flow(self, client, monkeypatch):
+        """Non-image hosts must still go through yt-dlp and not return kind=images."""
+        import app
+
+        fake_yt_output = json.dumps({
+            "title": "Test Video",
+            "thumbnail": "http://x/thumb.jpg",
+            "duration": 90,
+            "uploader": "Tester",
+            "formats": [
+                {"format_id": "22", "height": 720, "vcodec": "h264", "tbr": 1000},
+            ],
+        })
+
+        def mock_run(cmd, *args, **kwargs):
+            class R:
+                returncode = 0
+                stdout = fake_yt_output
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        resp = client.post("/api/info", json={"url": "https://www.youtube.com/watch?v=jNQXAC9IVRw"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        # No kind=images escapee
+        assert data.get("kind") != "images"
+        # And the existing fields are still present
+        assert "title" in data
+        assert "formats" in data
+
+
+class TestMediaServe:
+    def test_media_serves_cached_file(self, client, tmp_cache):
+        import app
+        url = "https://www.instagram.com/p/serve1/"
+        # Place a file in <entry>/media/foo.jpg
+        path = app.cache.entry_path(url, "media/foo.jpg")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(b"\xff\xd8\xff\xe0xx")
+        from cache import cache_key
+        h = cache_key(url)
+        resp = client.get(f"/media/{h}/foo.jpg")
+        assert resp.status_code == 200
+        assert resp.data == b"\xff\xd8\xff\xe0xx"
+        assert "image/jpeg" in (resp.content_type or "")
+
+    def test_media_404_for_missing(self, client, tmp_cache):
+        resp = client.get("/media/deadbeef/nope.jpg")
+        assert resp.status_code == 404
+
+    def test_media_blocks_path_traversal(self, client, tmp_cache):
+        from cache import cache_key
+        url = "https://www.instagram.com/p/trav1/"
+        h = cache_key(url)
+        resp = client.get(f"/media/{h}/..%2F..%2Fetc%2Fpasswd")
+        # Either 404 or 400, but never 200 + /etc/passwd contents
+        assert resp.status_code in (400, 404)
+
+
+class TestDownloadAll:
+    def test_download_all_returns_zip(self, client, tmp_cache):
+        import app
+        url = "https://www.instagram.com/p/zip1/"
+        # Stage two media files
+        for name in ("a.jpg", "b.jpg"):
+            p = app.cache.entry_path(url, f"media/{name}")
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "wb") as f:
+                f.write(b"data-" + name.encode())
+        from cache import cache_key
+        h = cache_key(url)
+        resp = client.get(f"/api/download-all/{h}")
+        assert resp.status_code == 200
+        ct = resp.content_type or ""
+        assert "zip" in ct.lower()
+        # Verify the zip actually contains the files
+        import io as _io
+        import zipfile
+        zf = zipfile.ZipFile(_io.BytesIO(resp.data))
+        names = sorted(zf.namelist())
+        assert "a.jpg" in names
+        assert "b.jpg" in names
+
+    def test_download_all_404_for_unknown(self, client, tmp_cache):
+        resp = client.get("/api/download-all/deadbeef00")
+        assert resp.status_code == 404

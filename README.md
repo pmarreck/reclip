@@ -1,6 +1,6 @@
 # ReClip
 
-A self-hosted, open-source video and audio downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, and 1000+ other sites — download as MP4 or MP3, **transcribe with Whisper, summarize, and translate using local LLMs**.
+A self-hosted, open-source video, audio, and image downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, Threads, Reddit, and 1000+ other sites — download as MP4 / MP3 / image-grid, **transcribe with Whisper, summarize, translate, and counter-argue using local LLMs**, and **strip image carousels from social sites that block direct saves**.
 
 [![Garnix](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fgarnix.io%2Fapi%2Fbadges%2Fpmarreck%2Freclip%3Fbranch%3Dmain)](https://garnix.io/repo/pmarreck/reclip)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
@@ -22,16 +22,20 @@ A self-hosted, open-source video and audio downloader with a clean web UI. Paste
 - **Transcription** — speech-to-text via Whisper (oMLX, Ollama, or OpenAI-compatible endpoint)
 - **Summarization** — LLM-powered summaries of transcripts
 - **Translation** — translate transcripts or summaries to any language
+- **Counter-argument** — LLM challenges claims in the transcript (declines gracefully on tutorials/news/music)
+- **Text-to-speech** — local TTS playback of summaries/translations via Qwen3-TTS / Voxtral / Kokoro
+- **Image-host extraction** — Instagram / Threads / Reddit / X / Pinterest / Tumblr / Imgur / Flickr / DeviantArt carousels render as a 2-up grid via [gallery-dl](https://github.com/mikf/gallery-dl); long-press / right-click saves images directly. Tap to open raw image in a new tab.
 - **Inline results** — view transcripts, summaries, and translations directly in the UI with expand/collapse and save-to-file
 - **Playlist support** — paste a YouTube playlist URL, get all videos as cards with batch Download All / Transcribe All / Summarize All
 - **Flat-file cache** — normalized-URL-keyed cache avoids redundant downloads, transcriptions, and LLM calls. Size-configurable with LRU eviction
 - **Metadata headers** — transcripts include video title, channel, date, duration, and URL for context
 - **Server-Sent Events** — real-time status updates instead of polling
+- **Remote access** — opt-in bind to all interfaces for LAN / Tailscale use, with loopback-only Settings UI gate
 - **CLI interface** — `python cli.py transcribe|summarize|translate|info|cache|config`
 - **Multi-video page support** — pages with multiple embedded videos (e.g. NYT articles) are handled correctly
 - **Nix flake** — reproducible dev environment, no venv needed
-- **Independently configurable backends** — separate URL, model, API key, and prompt for STT, summarization, and translation
-- **62 tests** — config, cache, LLM client, and API integration tests
+- **Independently configurable backends** — separate URL, model, API key, and prompt for STT, summarization, translation, counterargument, and TTS
+- **164 tests** — config, cache, LLM client, media extractor, and API integration tests
 
 ## Quick Start
 
@@ -46,8 +50,8 @@ RECLIP_API_KEY=your_omlx_key ./run
 ### Without Nix
 
 ```bash
-pip install flask requests
-brew install yt-dlp ffmpeg    # or apt install ffmpeg && pip install yt-dlp
+pip install flask requests gallery-dl
+brew install yt-dlp ffmpeg gallery-dl    # or: apt install ffmpeg && pip install yt-dlp gallery-dl
 RECLIP_API_KEY=your_omlx_key python app.py
 ```
 
@@ -95,8 +99,12 @@ RECLIP_API_KEY=your_key ./run
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `RECLIP_API_KEY` | (empty) | Common API key fallback for all backends |
+| `RECLIP_HOST` | `127.0.0.1` | Server bind address. Set to `0.0.0.0` for LAN/Tailscale (see [Remote access](#remote-access)) |
+| `RECLIP_PORT` | `8899` | Server port |
 | `RECLIP_CACHE_DIR` | `$XDG_CACHE_HOME/reclip` | Cache directory |
 | `RECLIP_CACHE_MAX_MB` | `1024` | Max cache size in MB (LRU eviction) |
+| `RECLIP_GALLERY_DL_BROWSER` | `firefox` | Browser to extract cookies from for image-host auth (see [Image-host extraction](#image-host-extraction)). Set to `""` to disable. |
+| `RECLIP_GALLERY_DL_COOKIES` | (empty) | Path to a Netscape-format `cookies.txt` file. Wins over `_BROWSER` when both are set. |
 | `RECLIP_STT_URL` | `http://localhost:8000/v1/audio/transcriptions` | Speech-to-text endpoint |
 | `RECLIP_STT_API_KEY` | `$RECLIP_API_KEY` | STT-specific API key |
 | `RECLIP_STT_MODEL` | `whisper-large-v3-fp16` | Whisper model name (see [STT model notes](#stt-model-notes)) |
@@ -109,6 +117,15 @@ RECLIP_API_KEY=your_key ./run
 | `RECLIP_TRANSLATE_API_KEY` | `$RECLIP_API_KEY` | Translation-specific API key |
 | `RECLIP_TRANSLATE_MODEL` | `gemma4-heretical-mlx-8bit` | Translation model |
 | `RECLIP_TRANSLATE_PROMPT` | (built-in, uses `{language}`) | Custom translation system prompt |
+| `RECLIP_COUNTERARGUE_URL` | `http://localhost:8000/v1/chat/completions` | Counter-argument endpoint |
+| `RECLIP_COUNTERARGUE_API_KEY` | `$RECLIP_API_KEY` | Counter-argument API key |
+| `RECLIP_COUNTERARGUE_MODEL` | `gemma4-heretical-mlx-8bit` | Counter-argument model |
+| `RECLIP_COUNTERARGUE_PROMPT` | (built-in) | Custom counter-argument system prompt |
+| `RECLIP_TTS_URL` | `http://localhost:8000/v1/audio/speech` | TTS endpoint |
+| `RECLIP_TTS_API_KEY` | `$RECLIP_API_KEY` | TTS API key |
+| `RECLIP_TTS_MODEL` | `Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` | TTS model (see [TTS model notes](#tts-model-notes)) |
+| `RECLIP_TTS_VOICE` | *warm feminine voice…* | Voice description, preset name, or path to a reference clip |
+| `RECLIP_TTS_VOICE_TEXT` | (empty) | Transcript of `RECLIP_TTS_VOICE` clip (only if VOICE is a path) |
 
 ### Supported providers
 
@@ -167,6 +184,59 @@ Or invoke the script directly without Nix: `./scripts/fix-omlx-stt.sh`. It idemp
 
 Switching models is just a config edit — change `RECLIP_TTS_MODEL` in the Settings modal (or `~/.config/reclip+/config.ini`); hot-reload picks it up within ~5 seconds. No restart needed.
 
+## Image-host extraction
+
+Many social sites (Instagram, Threads, Reddit, X/Twitter, Pinterest, Tumblr, Imgur, Flickr, DeviantArt) block easy image saves — long-pressing only saves a thumbnail, or the site overlays a tap-trap. ReClip+ routes those URLs through [gallery-dl](https://github.com/mikf/gallery-dl) instead of yt-dlp, then renders the items as a 2-up scrollable grid:
+
+- **Long-press** (mobile) or **right-click** (desktop) → native "Save Image"
+- **Tap** the image → opens the raw bytes in a new tab (no HTML framing)
+- **Download All (zip)** → bundles every item from the post into a single zip
+
+`/api/info` only runs gallery-dl's metadata-fetch step (`--dump-json`, ~3-8s typical) and the grid renders with `<img src="…cdninstagram.com/…">` pointing at the host's CDN directly. The actual cached download happens lazily on the first **Download All** click. CDN URLs from Instagram typically expire after 24-48h; refetch from `/api/info` to refresh.
+
+### Authentication for protected hosts
+
+Instagram and most modern social sites bounce anonymous requests to a login wall. gallery-dl can extract session cookies from your already-logged-in browser:
+
+```ini
+# ~/.config/reclip+/config.ini
+RECLIP_GALLERY_DL_BROWSER=firefox          # default
+```
+
+For multi-profile browsers (Firefox Nightly, Developer Edition, named profiles), pass the **directory name** under the profiles directory, not the friendly profile name:
+
+```bash
+ls ~/Library/Application\ Support/Firefox/Profiles
+# 882i5035.default-nightly  jhwe9mqz.default-beta  6brha7lz.default
+```
+
+```ini
+RECLIP_GALLERY_DL_BROWSER=firefox:882i5035.default-nightly
+```
+
+For Chromium-derivatives that aren't built-in (e.g. ChatGPT Atlas):
+
+```ini
+RECLIP_GALLERY_DL_BROWSER=chromium:/Users/me/Library/Application Support/ChatGPT Atlas
+```
+
+For an exported Netscape-format cookies.txt (e.g. via the *cookies.txt* browser extension), use `RECLIP_GALLERY_DL_COOKIES=/path/to/cookies.txt`. It wins over `_BROWSER` when both are set.
+
+> **Security:** when `RECLIP_HOST` is non-loopback, anyone on your LAN/Tailscale who can reach the server can trigger image fetches that *ride* your session cookies (they cannot read them, but they can use them on the configured host). ReClip+ prints a red startup warning when both conditions hold. Set `RECLIP_GALLERY_DL_BROWSER=""` to disable, or pin `RECLIP_HOST=127.0.0.1`.
+
+## Remote access
+
+Default bind is `127.0.0.1` (loopback only). To reach ReClip+ from your phone over Tailscale or other devices on your LAN:
+
+```ini
+# ~/.config/reclip+/config.ini
+RECLIP_HOST=0.0.0.0          # all interfaces
+# or pin to a specific interface:
+RECLIP_HOST=100.x.y.z        # `tailscale ip -4` on this machine
+```
+
+Then restart `python app.py` (host bind requires a restart; everything else hot-reloads). On a non-loopback bind, you'll see a yellow warning at startup. The Settings modal stays loopback-gated — only the local user can change config — but transcription/summarization/TTS endpoints become reachable to any peer who can route to the box.
+
 ## Usage
 
 1. Paste one or more video URLs into the input box
@@ -204,17 +274,18 @@ When accessed from localhost, the web UI footer shows cache stats and configured
 
 ## Supported Sites
 
-Anything [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), including:
+**Video** — anything [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md): YouTube, TikTok, Vimeo, Twitch, Dailymotion, SoundCloud, Loom, Streamable, Facebook, LinkedIn, NYT, and 1000+ more.
 
-YouTube, TikTok, Instagram, Twitter/X, Reddit, Facebook, Vimeo, Twitch, Dailymotion, SoundCloud, Loom, Streamable, Pinterest, Tumblr, Threads, LinkedIn, NYT, and many more.
+**Image hosts** (routed via [gallery-dl](https://github.com/mikf/gallery-dl/blob/master/docs/supportedsites.md)) — Instagram, Threads, Reddit, Twitter/X, Pinterest, Pinimg, Tumblr, Imgur, Flickr, DeviantArt. URLs from these hosts auto-route to the image-grid view; everything else stays on the video pipeline.
 
 ## Stack
 
 - **Backend:** Python 3.12 + Flask
 - **Frontend:** Vanilla HTML/CSS/JS (single file, no build step)
-- **Download engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
+- **Video engine:** [yt-dlp](https://github.com/yt-dlp/yt-dlp) + [ffmpeg](https://ffmpeg.org/)
+- **Image engine:** [gallery-dl](https://github.com/mikf/gallery-dl)
 - **AI:** Any OpenAI-compatible API (oMLX Server, Ollama, LM Studio, OpenAI)
-- **Dependencies:** Flask, requests, yt-dlp, ffmpeg
+- **Dependencies:** Flask, requests, yt-dlp, gallery-dl, ffmpeg
 - **Dev:** Nix flake, pytest
 
 ## Disclaimer

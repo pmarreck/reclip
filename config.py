@@ -69,6 +69,20 @@ RECLIP_PORT=${RECLIP_PORT:-8899}
 RECLIP_CACHE_DIR=${RECLIP_CACHE_DIR}
 RECLIP_CACHE_MAX_MB=${RECLIP_CACHE_MAX_MB:-1024}
 
+# --- Image scrapers (gallery-dl auth) ---
+# Many image hosts (Instagram, Threads, Reddit, X/Twitter) reject anonymous
+# requests and bounce them to a login page. gallery-dl can either:
+#   a) read a cookies.txt (Netscape format) — set RECLIP_GALLERY_DL_COOKIES
+#   b) extract cookies live from a browser profile — set RECLIP_GALLERY_DL_BROWSER
+#      to one of: firefox, chromium, chrome, safari, edge, vivaldi, opera, brave
+# (a) wins if both are set. The default below picks a sensible browser per OS.
+# SECURITY: when RECLIP_HOST is non-loopback (e.g. 0.0.0.0 for Tailscale),
+# anyone who can reach this server can trigger fetches that ride your session
+# cookies to scrape on your behalf. They cannot read the cookies, but they
+# can ride them. Set RECLIP_GALLERY_DL_BROWSER="" to disable when exposed.
+RECLIP_GALLERY_DL_COOKIES=${RECLIP_GALLERY_DL_COOKIES}
+RECLIP_GALLERY_DL_BROWSER=${RECLIP_GALLERY_DL_BROWSER}
+
 # --- Common API key: used as fallback for all services below ---
 RECLIP_API_KEY=${RECLIP_API_KEY}
 
@@ -209,6 +223,18 @@ def _default_cache_dir():
 	return os.path.join(os.path.expanduser("~"), ".cache", "reclip")
 
 
+def _default_browser_for_cookies():
+	"""Default browser for gallery-dl cookie extraction.
+
+	Firefox across all platforms — works without OS-level permission prompts
+	(Safari needs Full Disk Access; Chrome on Linux uses kwallet/secret-service).
+	gallery-dl accepts 'chromium:/path/to/profile' for Chromium-derivatives like
+	ChatGPT Atlas; users wanting that should override RECLIP_GALLERY_DL_BROWSER.
+	Returns the gallery-dl browser-name string or "" to mean "no auth".
+	"""
+	return "firefox"
+
+
 def _default_config_dir():
 	override = os.environ.get("RECLIP_CONFIG_DIR")
 	if override:
@@ -275,6 +301,8 @@ class Config:
 			"port": host_port,
 			"cache_dir": os.path.expanduser(cache_dir),
 			"cache_max_mb": cache_max_mb,
+			"gallery_dl_cookies": os.path.expanduser(get("RECLIP_GALLERY_DL_COOKIES")) if get("RECLIP_GALLERY_DL_COOKIES") else "",
+			"gallery_dl_browser": get("RECLIP_GALLERY_DL_BROWSER", _default_browser_for_cookies()),
 			"stt_url": get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
 			"stt_api_key": get("RECLIP_STT_API_KEY"),
 			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-fp16"),

@@ -13,7 +13,10 @@
 
         python = pkgs.python312;
 
-        # Python libraries — yt-dlp is used as a subprocess
+        # Python libraries — yt-dlp and gallery-dl are used as subprocesses.
+        # gallery-dl ships via Nix only (not requirements.txt) so we don't
+        # have to pin two dependency systems. It's a top-level pkg, not in
+        # python3Packages, so it's added to buildInputs separately below.
         pythonEnv = python.withPackages (ps: with ps; [
           flask
           requests
@@ -34,10 +37,10 @@
 
           installPhase = ''
             mkdir -p $out/share/reclip $out/bin
-            cp -r app.py config.py cache.py llm_client.py service.py templates static assets $out/share/reclip/
+            cp -r app.py config.py cache.py llm_client.py service.py media_extractor.py templates static assets $out/share/reclip/
             makeWrapper ${pythonEnv}/bin/python $out/bin/reclip \
               --add-flags "$out/share/reclip/app.py" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp pkgs.gallery-dl ]}
           '';
         };
 
@@ -46,10 +49,11 @@
             pythonEnv
             pkgs.ffmpeg
             pkgs.yt-dlp
+            pkgs.gallery-dl
           ];
 
           shellHook = ''
-            echo "ReClip dev shell — python, flask, yt-dlp, ffmpeg all available"
+            echo "ReClip dev shell — python, flask, yt-dlp, gallery-dl, ffmpeg all available"
             echo "Run: python app.py"
           '';
         };

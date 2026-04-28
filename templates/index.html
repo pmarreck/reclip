@@ -528,6 +528,28 @@
       gap: 8px;
     }
 
+    /* Image grid (gallery-dl results) */
+    .image-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      max-height: 70vh;
+      overflow-y: auto;
+      padding: 4px;
+      background: var(--card);
+      border: 1.5px solid var(--card-border);
+      border-radius: var(--radius);
+      width: 100%;
+    }
+    .image-grid img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 8px;
+      background: var(--card-border);
+    }
+    .image-grid .img-tile { position: relative; }
+
     /* Mobile */
     @media (max-width: 500px) {
       .brand h1 { font-size: 3rem; }
@@ -668,10 +690,21 @@
           const data = await res.json();
           if (data.error) {
             cardData[idx] = { ...cardData[idx], status: 'info-error', error: data.error };
+          } else if (data.kind === 'images') {
+            cardData[idx] = {
+              ...cardData[idx],
+              status: 'ready',
+              kind: 'images',
+              items: data.items || [],
+              entryHash: data.entry_hash || '',
+              title: '',
+              uploader: '',
+            };
           } else {
             cardData[idx] = {
               ...cardData[idx],
               status: 'ready',
+              kind: 'video',
               title: data.title || '',
               thumbnail: data.thumbnail || '',
               duration: data.duration,
@@ -730,6 +763,25 @@
             <div class="card-title" style="color:var(--error)">Could not fetch video</div>
             <div class="card-error-msg">${esc(friendlyError(c.error || ''))}</div>
             <div class="card-error-url">${esc(c.url)}</div>
+          </div>
+        `;
+        return;
+      }
+
+      // Image-grid layout for gallery-dl results
+      if (c.kind === 'images') {
+        el.className = 'card';
+        const tiles = (c.items || []).map(it =>
+          `<div class="img-tile"><a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(it.url)}" alt="${esc(it.filename || '')}" loading="lazy"></a></div>`
+        ).join('');
+        const dlUrl = c.entryHash ? `/api/download-all/${esc(c.entryHash)}` : '';
+        el.innerHTML = `
+          <div class="card-body" style="width:100%;">
+            <div class="card-meta">${(c.items || []).length} images &middot; long-press / right-click to save individually</div>
+            <div class="image-grid">${tiles}</div>
+            <div class="card-actions" style="margin-top:10px;">
+              ${dlUrl ? `<a class="card-dl-btn" href="${dlUrl}" download>Download All (zip)</a>` : ''}
+            </div>
           </div>
         `;
         return;
