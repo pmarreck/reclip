@@ -154,11 +154,25 @@ def chat_completion(url, model, api_key="", system_prompt="", user_content="", a
 
 
 def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
-                   response_format="wav", api_key_hint=""):
+                   response_format="wav", api_key_hint="",
+                   ref_audio_path="", ref_text=""):
 	"""Generate speech audio from text via OpenAI-compatible TTS endpoint.
+
+	For voice cloning (Qwen3-TTS-Base, F5-TTS, etc.) pass both:
+	  - `ref_audio_path`: filesystem path to a short reference clip (~5-10s
+	    of clean speech in the target voice)
+	  - `ref_text`: the transcript of that reference clip
+
+	The function reads the file, base64-encodes it, and posts it as
+	`ref_audio` (oMLX's schema). Both fields are required together.
+
+	For preset-voice models (Kokoro, CustomVoice, OpenAI), pass `voice`
+	instead — a string identifier.
 
 	Returns raw audio bytes.
 	"""
+	import base64
+
 	headers = {"Content-Type": "application/json"}
 	if api_key:
 		headers["Authorization"] = f"Bearer {api_key}"
@@ -171,6 +185,10 @@ def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
 	}
 	if voice:
 		payload["voice"] = voice
+	if ref_audio_path and ref_text:
+		with open(ref_audio_path, "rb") as f:
+			payload["ref_audio"] = base64.b64encode(f.read()).decode("ascii")
+		payload["ref_text"] = ref_text
 
 	resp = requests.post(url, headers=headers, json=payload, timeout=600)
 

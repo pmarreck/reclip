@@ -564,6 +564,59 @@ class TestTTSTextCleaning:
         assert "- second with bold inside" in out
 
 
+class TestTTSPipelineBoundary:
+    """Locks in: TTS-fed text is cleaned, but the cached on-disk text is NOT."""
+
+    def test_speak_strips_markdown_only_for_tts_not_cache(self, client, tmp_cache, monkeypatch):
+        import app
+        from cache import Cache
+
+        url = "https://youtube.com/watch?v=mdtest1"
+        c = Cache(str(tmp_cache), max_mb=10)
+        # Cache a summary that contains markdown the user expects to keep
+        markdown_summary = "**Heading**\n\n* first point\n* second **important** point"
+        c.write_text(url, "summary.txt", markdown_summary)
+
+        # Capture every call's text+ref so we can assert what TTS actually sees
+        captured = []
+
+        def fake_tts(*args, **kwargs):
+            captured.append(kwargs.get("text", ""))
+            # Return a minimal valid WAV (44-byte RIFF header is enough for the
+            # concat path because we only generate one chunk for short text)
+            import wave, io
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(24000)
+                w.writeframes(b"\x00\x00" * 100)
+            return buf.getvalue()
+
+        monkeypatch.setattr(app, "text_to_speech", fake_tts)
+        # Don't try to extract a real voice reference — speak with no clone
+        monkeypatch.setattr(app, "_resolve_voice_reference", lambda u: ("", ""))
+
+        # Run the worker synchronously so we can assert immediately
+        app.jobs["t1"] = {"status": "processing", "type": "media", "url": url}
+        app._run_speak("t1", url, "summary", "")
+
+        assert app.jobs["t1"]["status"] == "done", app.jobs["t1"].get("error")
+
+        # The on-disk summary still has markdown — not modified
+        cached = c.read_text(url, "summary.txt")
+        assert cached == markdown_summary
+        assert "**" in cached
+        assert "* first point" in cached
+
+        # But what we sent to TTS has no ** and bullets are converted to '-'
+        assert captured, "text_to_speech was never called"
+        joined = "\n".join(captured)
+        assert "**" not in joined
+        assert "- first point" in joined
+        assert "- second important point" in joined
+
+
 class TestTTSChunking:
     def test_short_text_single_chunk(self):
         from app import _chunk_text_for_tts

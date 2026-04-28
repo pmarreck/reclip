@@ -846,39 +846,106 @@ def _tts_cache_filename(text, voice):
     return f"tts-{h}.wav"
 
 
-def _resolve_voice(url):
-    """Pick the best voice reference: middle 10s of video audio > global default > none.
+def _resolve_speak_inputs(url, voice_override=""):
+    """Return (ref_audio_path, ref_text, voice_str) for the speak pipeline.
 
-    Extracts a 10-second clip from the middle of the audio for voice cloning,
-    avoiding intro/outro music and getting the primary speaker.
+    Implements the priority order described in _run_speak. Caller passes
+    one of (ref_audio + ref_text) OR voice_str to text_to_speech; the
+    other will be empty. Both can be empty if no voice config + no audio.
     """
-    if cache.has_file(url, "audio.mp3"):
-        voice_clip = cache.entry_path(url, "voice_sample.wav")
-        if not os.path.isfile(voice_clip):
-            audio_path = cache.entry_path(url, "audio.mp3")
+    candidate = voice_override or cfg.get("tts_voice", "") or ""
+
+    if candidate:
+        # Distinguish between a path-on-disk and a description string
+        if os.path.isfile(candidate):
+            # User-supplied ref_audio clip. We need a transcript for ref_text.
+            # If the user also set RECLIP_TTS_VOICE_TEXT, use it; otherwise
+            # transcribe the clip via STT.
+            override_text = cfg.get("tts_voice_text", "") or ""
+            if override_text:
+                return (candidate, override_text, "")
             try:
-                # Get duration via ffprobe
-                probe = subprocess.run(
-                    ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                     "-of", "csv=p=0", audio_path],
-                    capture_output=True, text=True, timeout=10,
+                stt_result = llm_transcribe(
+                    audio_path=candidate,
+                    url=cfg["stt_url"],
+                    model=cfg["stt_model"],
+                    api_key=cfg["stt_api_key"],
+                    prompt=cfg["stt_prompt"],
+                    api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
                 )
-                duration = float(probe.stdout.strip()) if probe.returncode == 0 else 60
-                # Extract 10 seconds from the middle
-                start = max(0, (duration / 2) - 5)
-                subprocess.run(
-                    ["ffmpeg", "-y", "-i", audio_path, "-ss", str(start),
-                     "-t", "10", "-ar", "24000", "-ac", "1", voice_clip],
-                    capture_output=True, timeout=30,
-                )
+                return (candidate, (stt_result.get("text") or "").strip(), "")
             except Exception:
-                return cfg["tts_voice"] or ""
-        if os.path.isfile(voice_clip):
-            return voice_clip
-    # Fall back to globally configured voice
-    if cfg["tts_voice"]:
-        return cfg["tts_voice"]
-    return ""
+                # If STT fails, fall through to using as voice description
+                return ("", "", candidate)
+        # Plain string — voice name or description for instruct-capable models
+        return ("", "", candidate)
+
+    # No explicit voice config — auto-clone from the video's cached audio
+    rp, rt = _resolve_voice_reference(url)
+    return (rp, rt, "")
+
+
+def _resolve_voice_reference(url):
+    """Produce a (ref_audio_path, ref_text) tuple for voice cloning.
+
+    Extracts a 7-second clip from the middle of the cached audio (avoiding
+    intro/outro and matching Qwen3-TTS-Base's recommended ~10s ceiling),
+    then transcribes it via STT to produce the ref_text that voice-cloning
+    models require alongside ref_audio. Both are cached so subsequent
+    speak calls reuse them.
+
+    Returns (path, text) or ("", "") if a reference can't be produced.
+    """
+    if not cache.has_file(url, "audio.mp3"):
+        return ("", "")
+
+    voice_clip = cache.entry_path(url, "voice_sample.wav")
+    voice_clip_text_path = cache.entry_path(url, "voice_sample.txt")
+
+    # Extract clip if missing
+    if not os.path.isfile(voice_clip):
+        audio_path = cache.entry_path(url, "audio.mp3")
+        try:
+            probe = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", audio_path],
+                capture_output=True, text=True, timeout=10,
+            )
+            duration = float(probe.stdout.strip()) if probe.returncode == 0 else 60
+            # 7-second clip from the middle. Qwen3-TTS docs recommend ~10s
+            # max; longer references increase voice variance.
+            start = max(0, (duration / 2) - 3.5)
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", audio_path, "-ss", str(start),
+                 "-t", "7", "-ar", "24000", "-ac", "1", voice_clip],
+                capture_output=True, timeout=30,
+            )
+        except Exception:
+            return ("", "")
+        if not os.path.isfile(voice_clip):
+            return ("", "")
+
+    # Transcribe the clip if we don't have a transcript yet
+    ref_text = cache.read_text(url, "voice_sample.txt")
+    if not ref_text:
+        try:
+            stt_result = llm_transcribe(
+                audio_path=voice_clip,
+                url=cfg["stt_url"],
+                model=cfg["stt_model"],
+                api_key=cfg["stt_api_key"],
+                prompt=cfg["stt_prompt"],
+                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            )
+            ref_text = (stt_result.get("text") or "").strip()
+            cache.write_text(url, "voice_sample.txt", ref_text)
+        except Exception:
+            ref_text = ""
+
+    # If STT failed, we can still try voice-cloning with a placeholder; some
+    # mlx-audio variants are lenient. Empty ref_text disables cloning entirely
+    # in our llm_client (both fields must be set).
+    return (voice_clip, ref_text or "")
 
 
 def _run_speak(job_id, url, source, voice_override):
@@ -901,8 +968,20 @@ def _run_speak(job_id, url, source, voice_override):
         if text is None:
             raise RuntimeError(f"No {source} text found — run that operation first")
 
-        voice = voice_override or _resolve_voice(url)
-        tts_filename = _tts_cache_filename(text, voice)
+        # Voice resolution priority:
+        #   1. voice_override (per-request body) — highest
+        #   2. RECLIP_TTS_VOICE (config) — could be a preset voice name, a
+        #      voice-description prompt for instruct-capable models, or a
+        #      filesystem path to a reference audio clip
+        #   3. Auto-clone from the video's own audio (middle 7s + STT)
+        #
+        # File paths route to ref_audio (with ref_text from STT of the clip).
+        # Plain strings route to the OpenAI-compatible `voice` field, which
+        # oMLX maps to mlx-audio's voice= kwarg if the model has one
+        # (Kokoro, CustomVoice) or instruct= otherwise (Qwen3-TTS Base).
+        ref_path, ref_text, voice_str = _resolve_speak_inputs(url, voice_override)
+        cache_key_voice = voice_str or ref_path
+        tts_filename = _tts_cache_filename(text, cache_key_voice)
 
         # Check TTS cache
         if cache.has_file(url, tts_filename):
@@ -911,36 +990,25 @@ def _run_speak(job_id, url, source, voice_override):
             job["filename"] = f"{source}.wav"
             return
 
-        # Chunk long text to avoid Qwen3-TTS voice drift on >300 chars
-        # (see github.com/QwenLM/Qwen3-TTS issues #80, #239).
-        # Voice consistency across chunks: anchor chunks 2+ to the FIRST
-        # chunk's generated audio (saved to cache as tts-anchor.wav). The
-        # original `voice` (middle 10s of source) is non-deterministic when
-        # used directly across multiple calls — each call rolls a different
-        # voice from its sample-space. Pinning chunks 2+ to chunk 1's audio
-        # makes the whole output sound like one speaker.
+        # Chunk long text to avoid Qwen3-TTS drift on >300 chars
+        # (github.com/QwenLM/Qwen3-TTS issues #80, #239). Each chunk gets
+        # the SAME ref_audio + ref_text, which is what voice-cloning models
+        # need for consistency across calls.
         chunks = _chunk_text_for_tts(text, max_chars=300)
         chunk_wavs = []
-        anchor_path = None
         for i, chunk in enumerate(chunks):
             job["progress"] = f"chunk {i+1}/{len(chunks)}"
-            current_voice = anchor_path if anchor_path else voice
             chunk_wav = text_to_speech(
                 url=cfg["tts_url"],
                 model=cfg["tts_model"],
                 text=chunk,
                 api_key=cfg["tts_api_key"],
-                voice=current_voice,
+                voice=voice_str,
+                ref_audio_path=ref_path,
+                ref_text=ref_text,
                 api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
             )
             chunk_wavs.append(chunk_wav)
-
-            # After the first chunk, persist it and use it as the voice
-            # reference for all subsequent chunks.
-            if i == 0 and len(chunks) > 1:
-                anchor_path = cache.entry_path(url, "tts-anchor.wav")
-                with open(anchor_path, "wb") as f:
-                    f.write(chunk_wav)
 
         # Concatenate WAV chunks into single output
         out_path = cache.entry_path(url, tts_filename)
@@ -975,8 +1043,12 @@ def speak_endpoint():
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
-    # Quick cache check
-    voice = voice_override or _resolve_voice(url)
+    # Quick cache check — match the cache key formula used in _run_speak
+    if voice_override:
+        cache_key_voice = voice_override
+    else:
+        ref_path, _ = _resolve_voice_reference(url)
+        cache_key_voice = ref_path
     source_map = {
         "transcript": "transcript.txt",
         "summary": "summary.txt",
@@ -989,7 +1061,7 @@ def speak_endpoint():
 
     text = cache.read_text(url, source_file)
     if text:
-        tts_filename = _tts_cache_filename(text, voice)
+        tts_filename = _tts_cache_filename(text, cache_key_voice)
         if cache.has_file(url, tts_filename):
             return send_file(
                 cache.entry_path(url, tts_filename),
@@ -1020,7 +1092,11 @@ def speak_download():
     if not url:
         return jsonify({"error": "No URL provided"}), 400
 
-    voice = voice_override or _resolve_voice(url)
+    if voice_override:
+        cache_key_voice = voice_override
+    else:
+        ref_path, _ = _resolve_voice_reference(url)
+        cache_key_voice = ref_path
     source_map = {
         "transcript": "transcript.txt",
         "summary": "summary.txt",
@@ -1035,7 +1111,7 @@ def speak_download():
     if not text:
         return jsonify({"error": "No text to speak"}), 404
 
-    tts_filename = _tts_cache_filename(text, voice)
+    tts_filename = _tts_cache_filename(text, cache_key_voice)
     wav_path = cache.entry_path(url, tts_filename)
 
     if fmt == "mp3":

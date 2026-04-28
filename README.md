@@ -146,6 +146,27 @@ nix run .#fix-omlx -- --revert   # restore from .reclip-backup
 
 Or invoke the script directly without Nix: `./scripts/fix-omlx-stt.sh`. It idempotently patches `oMLX.app`'s bundled `tokenization_mistral_common.py` to make the `ReasoningEffort` import optional. Restart oMLX after patching. Upstream fix will be a one-line dep bump in oMLX's `pyproject.toml` — see `docs/upstream/jundot-omlx-issue-draft.md` for the issue body.
 
+### TTS model notes
+
+`RECLIP_TTS_VOICE` controls how the speak pipeline picks a voice. It accepts three forms, in priority order:
+
+1. **A voice description string** (default): routed via the OpenAI `voice` field. With `Qwen3-TTS-12Hz-1.7B-Base-8bit` (the default model) oMLX maps it to mlx-audio's `instruct=` kwarg, so phrases like *"warm feminine voice with a soft sultry tone, gentle and engaging"* (the built-in default) work directly. With Kokoro or `Qwen3-TTS-CustomVoice` it selects a preset voice by name (e.g. `af_bella`, `am_michael`).
+2. **A filesystem path** to a reference audio clip: used as `ref_audio` for voice cloning. ReClip+ runs STT once on the clip to derive the required `ref_text` and caches it; you can also pre-set it via `RECLIP_TTS_VOICE_TEXT`.
+3. **Empty**: fall back to per-video voice cloning. Extracts a 7-second clip from the middle of the cached audio (matching Qwen3-TTS-Base's recommended ~10s ceiling — longer clips increase voice variance), transcribes it for `ref_text`, and uses both as the voice reference. Each `Listen` thus reads in the original speaker's voice.
+
+**Tested TTS models** (all from `mlx-community` on HuggingFace, downloadable from oMLX's admin UI):
+
+| Model | Voice control | Notes |
+|-------|--------------|-------|
+| `Qwen3-TTS-12Hz-1.7B-Base-8bit` (default) | Description prompt OR ref_audio cloning | ~860 MB. Best when you want either freeform descriptions or cloning. The Base model is known to roll different voices across calls when given only a sample (issue [#80](https://github.com/QwenLM/Qwen3-TTS/issues/80)) — providing both `ref_audio` AND `ref_text` (which ReClip+ does automatically) is the documented stable form. Pronunciation can occasionally slip (e.g. "fix" → "feeks"); switching to CustomVoice or Kokoro is the fix. |
+| `Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit` | 9 fixed premium voices | Far more consistent. Pick a voice by name via `RECLIP_TTS_VOICE`. No cloning. |
+| `Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` | Pure description-driven generation | Built specifically for natural-language voice descriptions. Best fit for the default *"warm feminine voice…"* style. |
+| `Voxtral-4B-TTS-2603-mlx-4bit` | Preset voices | Mistral's TTS, larger but very high quality. No cloning. |
+| `Marvis-AI/marvis-tts-250m-v0.2-MLX-8bit` | Preset voices | Tiny, designed for streaming. |
+| Kokoro variants in mlx-audio | 54 preset voices | Most consistent narrator quality on the open-source side; no cloning. |
+
+Switching models is just a config edit — change `RECLIP_TTS_MODEL` in the Settings modal (or `~/.config/reclip+/config.ini`); hot-reload picks it up within ~5 seconds. No restart needed.
+
 ## Usage
 
 1. Paste one or more video URLs into the input box

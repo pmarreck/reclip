@@ -98,8 +98,19 @@ RECLIP_COUNTERARGUE_MODEL=${RECLIP_COUNTERARGUE_MODEL:-gemma4-heretical-mlx-8bit
 RECLIP_TTS_URL=${RECLIP_TTS_URL:-http://localhost:8000/v1/audio/speech}
 RECLIP_TTS_API_KEY=${RECLIP_TTS_API_KEY:-${RECLIP_API_KEY}}
 RECLIP_TTS_MODEL=${RECLIP_TTS_MODEL:-Qwen3-TTS-12Hz-1.7B-Base-8bit}
-# Path to a reference audio file for voice cloning (used when no video audio is cached)
-RECLIP_TTS_VOICE=${RECLIP_TTS_VOICE}
+# RECLIP_TTS_VOICE may be:
+#   - empty: auto-clone from each video's own audio (middle 7s + STT)
+#   - a voice description string: routed via the OpenAI `voice` field. With
+#     Qwen3-TTS-Base this becomes the `instruct=` prompt; with Kokoro or
+#     Qwen3-TTS-CustomVoice it selects a preset voice by name.
+#   - a filesystem path to a reference audio file: used as ref_audio for
+#     voice cloning across all videos. RECLIP_TTS_VOICE_TEXT (the transcript
+#     of that clip) is recommended; if absent, ReClip+ will run STT on the
+#     clip once and cache the transcript.
+RECLIP_TTS_VOICE=${RECLIP_TTS_VOICE:-warm feminine voice with a soft sultry tone, gentle and engaging}
+# Optional: transcript of the RECLIP_TTS_VOICE clip (only used when VOICE is
+# a file path). Skip auto-STT if you provide it here.
+RECLIP_TTS_VOICE_TEXT=${RECLIP_TTS_VOICE_TEXT}
 """
 
 
@@ -264,7 +275,8 @@ class Config:
 			"tts_url": get("RECLIP_TTS_URL", "http://localhost:8000/v1/audio/speech"),
 			"tts_api_key": get("RECLIP_TTS_API_KEY"),
 			"tts_model": get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-Base-8bit"),
-			"tts_voice": get("RECLIP_TTS_VOICE"),
+			"tts_voice": get("RECLIP_TTS_VOICE", "warm feminine voice with a soft sultry tone, gentle and engaging"),
+			"tts_voice_text": get("RECLIP_TTS_VOICE_TEXT"),
 		}
 
 	def maybe_reload(self):
