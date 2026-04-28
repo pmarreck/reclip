@@ -667,6 +667,45 @@ class TestServiceEndpoints:
         resp = client.post("/api/service/uninstall", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
         assert resp.status_code == 403
 
+    def test_status_includes_running_as_service_flag(self, client):
+        """UI uses this flag to pick the right button labels."""
+        resp = client.get("/api/service")
+        data = resp.get_json()
+        assert "is_running_as_service" in data
+        assert isinstance(data["is_running_as_service"], bool)
+
+
+class TestRestartEndpoint:
+    """POST /api/restart schedules a clean process exit. Loopback-only.
+    Under launchd/systemd the supervisor respawns the process. Under
+    foreground `python app.py` the server just dies."""
+
+    def test_restart_loopback_gated(self, client):
+        resp = client.post("/api/restart", environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403
+
+    def test_restart_schedules_exit(self, client, monkeypatch):
+        """Endpoint must respond before the exit fires (so the browser sees
+        the 202), and the exit must actually be scheduled."""
+        import app
+
+        scheduled = []
+
+        def fake_schedule_exit(delay):
+            scheduled.append(delay)
+
+        monkeypatch.setattr(app, "_schedule_self_exit", fake_schedule_exit)
+
+        resp = client.post("/api/restart")
+        assert resp.status_code == 202, resp.get_json()
+        data = resp.get_json()
+        assert data.get("ok") is True
+        assert "is_running_as_service" in data
+        # Exactly one exit was scheduled
+        assert len(scheduled) == 1
+        # Some non-zero delay so the response can land first
+        assert scheduled[0] > 0
+
 
 class TestImageInfoFlow:
     """When /api/info gets an image-host URL, it should route to gallery-dl

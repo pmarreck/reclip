@@ -15,7 +15,7 @@ import hashlib
 import zipfile
 import mimetypes
 from llm_client import transcribe as llm_transcribe, chat_completion, text_to_speech, LLMError
-from service import ServiceManager
+from service import ServiceManager, is_running_as_service
 import media_extractor
 from media_extractor import classify_url
 
@@ -771,6 +771,34 @@ def service_uninstall():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     return jsonify({"ok": True, **mgr.status()})
+
+
+def _schedule_self_exit(delay):
+    """Spawn a daemon thread that calls os._exit after `delay` seconds.
+
+    Werkzeug's dev server has no clean shutdown API and SSE connections block
+    sys.exit, so os._exit is correct here. launchd/systemd treat it as a
+    normal exit and respawn.
+    """
+    def _do_exit():
+        time.sleep(delay)
+        os._exit(0)
+    t = threading.Thread(target=_do_exit, daemon=True)
+    t.start()
+
+
+@app.route("/api/restart", methods=["POST"])
+def restart_server():
+    """Schedule a clean exit. Under a supervisor (launchd/systemd) the
+    process respawns; under foreground it stays dead. Loopback-only."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: restart is only available via loopback"}), 403
+    _schedule_self_exit(0.5)
+    return jsonify({
+        "ok": True,
+        "is_running_as_service": is_running_as_service(),
+        "delay_s": 0.5,
+    }), 202
 
 
 @app.route("/api/playlist", methods=["POST"])

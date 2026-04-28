@@ -10,6 +10,30 @@ class TestPlatformDetection:
 		assert detect_platform() in ("darwin", "linux", "unsupported")
 
 
+class TestServiceModeDetection:
+	"""is_running_as_service() distinguishes a launchd/systemd-spawned process
+	from a user-launched foreground `python app.py`. The launchd plist /
+	systemd unit sets RECLIP_RUNNING_AS_SERVICE=1; the user's foreground
+	shell does not."""
+
+	def test_returns_false_when_env_unset(self, monkeypatch):
+		monkeypatch.delenv("RECLIP_RUNNING_AS_SERVICE", raising=False)
+		from service import is_running_as_service
+		assert is_running_as_service() is False
+
+	def test_returns_true_when_env_set_to_one(self, monkeypatch):
+		monkeypatch.setenv("RECLIP_RUNNING_AS_SERVICE", "1")
+		from service import is_running_as_service
+		assert is_running_as_service() is True
+
+	def test_captured_env_injects_service_marker(self, monkeypatch):
+		"""So when the service spawns the child, the child sees the marker."""
+		monkeypatch.delenv("RECLIP_RUNNING_AS_SERVICE", raising=False)
+		from service import _captured_env
+		env = _captured_env()
+		assert env.get("RECLIP_RUNNING_AS_SERVICE") == "1"
+
+
 class TestCapturedEnv:
 	def test_captures_reclip_vars(self, monkeypatch):
 		monkeypatch.setenv("RECLIP_API_KEY", "sk-test-123")
@@ -211,4 +235,7 @@ class TestServiceManager:
 		from service import ServiceManager
 		mgr = ServiceManager(project_dir="/tmp/x", python_path="/bin/python")
 		status = mgr.status()
-		assert set(status.keys()) == {"platform", "supported", "installed", "running", "service_path"}
+		assert set(status.keys()) == {
+			"platform", "supported", "installed", "running",
+			"service_path", "is_running_as_service",
+		}

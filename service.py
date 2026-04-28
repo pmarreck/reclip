@@ -28,6 +28,16 @@ def detect_platform():
 	return "unsupported"
 
 
+def is_running_as_service():
+	"""True when this process was spawned by launchd/systemd via the unit
+	we generate. Used so the UI can show 'Restart server' (under a supervisor
+	that will respawn) vs 'Stop server' (foreground, manual relaunch needed).
+	The marker env var is set unconditionally in _captured_env() so it
+	always appears in the service file we render.
+	"""
+	return os.environ.get("RECLIP_RUNNING_AS_SERVICE") == "1"
+
+
 def _captured_env():
 	"""Snapshot relevant env vars from the current process for the service."""
 	env = {}
@@ -36,6 +46,8 @@ def _captured_env():
 			env[k] = v
 	# Ensure HOST defaults to loopback for safety
 	env.setdefault("HOST", "127.0.0.1")
+	# Marker so the spawned process can tell it's running under a supervisor.
+	env["RECLIP_RUNNING_AS_SERVICE"] = "1"
 	return env
 
 
@@ -149,13 +161,15 @@ class ServiceManager:
 		raise RuntimeError(f"Unsupported platform: {self.platform}")
 
 	def status(self):
-		"""Return dict: platform, supported, installed, running, service_path."""
+		"""Return dict: platform, supported, installed, running, service_path,
+		is_running_as_service."""
 		info = {
 			"platform": self.platform,
 			"supported": self.supported(),
 			"installed": False,
 			"running": False,
 			"service_path": self.service_path,
+			"is_running_as_service": is_running_as_service(),
 		}
 		if not self.supported() or not self.service_path:
 			return info
