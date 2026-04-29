@@ -649,8 +649,7 @@
       const container = document.getElementById('cards');
       btn.disabled = true;
       btn.textContent = 'Loading...';
-      container.innerHTML = '';
-      cardData = [];
+      // Don't wipe — cached entries below stay; new cards prepend on top.
 
       // Check if youtube playlist URL
       for (let i = 0; i < urls.length; i++) {
@@ -680,6 +679,9 @@
         const idx = cardData.length;
         cardData.push({ url, status: 'loading' });
         renderCard(idx);
+        // Move the freshly-rendered card to the top of the list.
+        const newEl = document.getElementById(`card-${idx}`);
+        if (newEl) container.prepend(newEl);
 
         try {
           const res = await fetch('/api/info', {
@@ -719,7 +721,8 @@
         renderCard(idx);
       }
 
-      if (cardData.filter(c => c.status === 'ready').length > 1) {
+      // Only count freshly-fetched cards (not cached recents) for "Download All".
+      if (cardData.filter(c => c && c.status === 'ready' && !c.cacheEntry).length > 1) {
         renderDownloadAll();
       }
 
@@ -729,6 +732,7 @@
 
     function renderCard(idx) {
       const c = cardData[idx];
+      if (!c) return;  // entry may have been deleted
       let el = document.getElementById(`card-${idx}`);
       if (!el) {
         el = document.createElement('div');
@@ -775,13 +779,19 @@
           `<div class="img-tile"><a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer"><img src="${esc(it.url)}" alt="${esc(it.filename || '')}" loading="lazy"></a></div>`
         ).join('');
         const dlUrl = c.entryHash ? `/api/download-all/${esc(c.entryHash)}` : '';
+        const itemCount = (c.items || []).length || c.itemCount || 0;
+        const placeholder = (itemCount === 0 && c.cacheEntry)
+          ? `<p class="hint" style="margin:0;font-size:0.7rem;">Metadata only &mdash; click Download All to fetch images.</p>`
+          : '';
         el.innerHTML = `
           <div class="card-body" style="width:100%;">
-            <div class="card-meta">${(c.items || []).length} images &middot; long-press / right-click to save individually</div>
+            <div class="card-meta">${esc(c.title || c.url)}${itemCount ? ` &middot; ${itemCount} images &middot; long-press / right-click to save individually` : ''}</div>
+            ${placeholder}
             <div class="image-grid">${tiles}</div>
             <div class="card-actions" style="margin-top:10px;">
               ${dlUrl ? `<a class="card-dl-btn" href="${dlUrl}" download>Download All (zip)</a>` : ''}
             </div>
+            ${renderCacheControls(idx, c)}
           </div>
         `;
         return;
@@ -886,8 +896,106 @@
           <div class="card-actions">${actionHtml}</div>
           ${translateHtml}
           <div class="card-ops" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">${opsHtml}</div>
+          ${renderCacheControls(idx, c)}
         </div>
       `;
+    }
+
+    // ----- Cache controls (Pin / Delete / Reveal) shown for any card backed
+    // by a real cache entry. Loopback-only users also see "Show in Finder" /
+    // "Open Folder". Uses absolute time deltas relative to last_accessed.
+    function fmtSize(mb) {
+      if (mb >= 1024) return (mb / 1024).toFixed(1) + ' GB';
+      if (mb >= 1) return mb.toFixed(1) + ' MB';
+      return Math.round(mb * 1024) + ' KB';
+    }
+    function fmtAgo(epochSec) {
+      if (!epochSec) return '';
+      const dt = Date.now() / 1000 - epochSec;
+      if (dt < 60) return 'just now';
+      if (dt < 3600) return Math.round(dt / 60) + 'm ago';
+      if (dt < 86400) return Math.round(dt / 3600) + 'h ago';
+      const days = Math.round(dt / 86400);
+      if (days < 30) return days + 'd ago';
+      const mo = Math.round(days / 30);
+      return mo + 'mo ago';
+    }
+    function renderCacheControls(idx, c) {
+      const ce = c.cacheEntry;
+      if (!ce) return '';
+      const pinLabel = ce.pinned ? 'Pinned' : 'Pin';
+      const pinTitle = ce.pinned ? 'Click to unpin (LRU eviction can purge it)' : 'Pin to keep this entry safe from cache eviction';
+      const revealLabel = _platform === 'darwin' ? 'Show in Finder' : 'Open Folder';
+      const revealBtn = _settingsLoopback && (_platform === 'darwin' || _platform === 'linux')
+        ? `<button class="card-dl-btn card-btn-alt" style="font-size:0.6rem;padding:3px 9px;" onclick="revealCacheEntry(${idx})">${revealLabel}</button>`
+        : '';
+      const sizeStr = fmtSize(ce.size_mb || 0);
+      const agoStr = fmtAgo(ce.last_accessed);
+      return `
+        <div class="cache-controls" style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--card-border);display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          <button class="card-dl-btn ${ce.pinned ? 'done' : 'card-btn-alt'}" title="${pinTitle}" style="font-size:0.6rem;padding:3px 9px;" onclick="togglePinCacheEntry(${idx})">${pinLabel}</button>
+          <button class="card-dl-btn card-btn-alt" style="font-size:0.6rem;padding:3px 9px;" onclick="deleteCacheEntry(${idx})">Delete</button>
+          ${revealBtn}
+          <span class="hint" style="margin-left:auto;font-size:0.6rem;">${esc(sizeStr)}${agoStr ? ' · ' + esc(agoStr) : ''}</span>
+        </div>`;
+    }
+
+    async function togglePinCacheEntry(idx) {
+      const c = cardData[idx];
+      const ce = c?.cacheEntry;
+      if (!ce) return;
+      const newPinned = !ce.pinned;
+      try {
+        const r = await fetch(`/api/cache/entry/${ce.entry_hash}/pin`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: newPinned }),
+        });
+        if (!r.ok) return;
+        cardData[idx].cacheEntry.pinned = newPinned;
+        renderCard(idx);
+      } catch (_) {}
+    }
+
+    async function deleteCacheEntry(idx) {
+      const c = cardData[idx];
+      const ce = c?.cacheEntry;
+      if (!ce) return;
+      const label = c.title || c.url || ce.entry_hash;
+      if (!confirm(`Delete cached entry?\n\n${label}`)) return;
+      try {
+        const r = await fetch(`/api/cache/entry/${ce.entry_hash}`, { method: 'DELETE' });
+        if (!r.ok) return;
+        // Remove the card from the DOM and from cardData
+        const el = document.getElementById(`card-${idx}`);
+        if (el) el.remove();
+        cardData[idx] = null;
+      } catch (_) {}
+    }
+
+    async function revealCacheEntry(idx) {
+      const ce = cardData[idx]?.cacheEntry;
+      if (!ce) return;
+      try {
+        await fetch(`/api/cache/entry/${ce.entry_hash}/reveal`, { method: 'POST' });
+      } catch (_) {}
+    }
+
+    async function clearAllCache() {
+      const keepPinned = confirm('Keep pinned entries?\n\nOK = clear unpinned only, Cancel = clear EVERYTHING.');
+      if (!confirm(keepPinned ? 'Clear all unpinned cache entries?' : 'Clear ENTIRE cache (including pinned)?')) return;
+      try {
+        const r = await fetch('/api/cache/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keep_pinned: keepPinned }),
+        });
+        if (!r.ok) return;
+        // Wipe affected cards; reload entries
+        document.getElementById('cards').innerHTML = '';
+        cardData = [];
+        await loadCacheEntries();
+      } catch (_) {}
     }
 
     function renderDownloadAll() {
@@ -1405,6 +1513,7 @@
     }
 
     let _settingsLoopback = false;
+    let _platform = '';
 
     (async function loadConfigFooter() {
       try {
@@ -1418,6 +1527,84 @@
         el.innerHTML = esc(info) + `<button class="settings-link" onclick="openSettings()">Settings</button>`;
       } catch {}
     })();
+
+    async function loadCacheEntries() {
+      try {
+        const [entriesRes, svcRes] = await Promise.all([
+          fetch('/api/cache/entries'),
+          fetch('/api/service').catch(() => null),
+        ]);
+        if (svcRes && svcRes.ok) {
+          const svc = await svcRes.json();
+          _platform = svc.platform || '';
+        }
+        if (!entriesRes.ok) return;
+        const data = await entriesRes.json();
+        const entries = data.entries || [];
+        if (!entries.length) return;
+
+        // Show a "Clear All" button only when there are cached entries.
+        renderClearAllBar(entries.length);
+
+        for (const e of entries) {
+          const idx = cardData.length;
+          const card = hydrateCacheEntry(e);
+          cardData.push(card);
+          renderCard(idx);
+        }
+      } catch (_) {}
+    }
+
+    function hydrateCacheEntry(e) {
+      // Map a /api/cache/entries entry to a cardData record. Status is 'ready'
+      // so the existing action buttons (Transcribe/Summarize/etc.) appear and
+      // hit the cache fast-path on click.
+      if (e.kind === 'images') {
+        const items = (e.media_files || []).map(fname => ({
+          filename: fname,
+          url: `/media/${e.entry_hash}/${encodeURIComponent(fname)}`,
+        }));
+        return {
+          url: e.url,
+          status: 'ready',
+          kind: 'images',
+          items: items,
+          itemCount: e.item_count || items.length,
+          entryHash: e.entry_hash,
+          title: e.title || e.url,
+          uploader: e.uploader || '',
+          cacheEntry: e,
+        };
+      }
+      return {
+        url: e.url,
+        status: 'ready',
+        kind: 'video',
+        title: e.title || e.url,
+        thumbnail: e.thumbnail || '',
+        duration: e.duration || 0,
+        uploader: e.uploader || '',
+        formats: [],
+        selectedFormatId: null,
+        cacheEntry: e,
+      };
+    }
+
+    function renderClearAllBar(count) {
+      const existing = document.getElementById('clear-all-bar');
+      if (existing) existing.remove();
+      const bar = document.createElement('div');
+      bar.id = 'clear-all-bar';
+      bar.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;margin:18px 0 10px 0;padding:8px 12px;background:var(--card);border:1.5px solid var(--card-border);border-radius:9px;';
+      bar.innerHTML = `
+        <span class="hint" style="font-size:0.7rem;">${count} cached ${count === 1 ? 'entry' : 'entries'} (most recent first)</span>
+        <button class="card-dl-btn card-btn-alt" style="font-size:0.7rem;padding:4px 10px;" onclick="clearAllCache()">Clear All</button>`;
+      const cards = document.getElementById('cards');
+      cards.parentNode.insertBefore(bar, cards);
+    }
+
+    // Kick off the recents fetch once the script has parsed.
+    loadCacheEntries();
 
     async function openSettings() {
       if (!_settingsLoopback) return;

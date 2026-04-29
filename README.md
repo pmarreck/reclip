@@ -25,6 +25,7 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 - **Counter-argument** — LLM challenges claims in the transcript (declines gracefully on tutorials/news/music)
 - **Text-to-speech** — local TTS playback of summaries/translations via Qwen3-TTS / Voxtral / Kokoro
 - **Image-host extraction** — Instagram / Threads / Reddit / X / Pinterest / Tumblr / Imgur / Flickr / DeviantArt carousels render as a 2-up grid via [gallery-dl](https://github.com/mikf/gallery-dl); long-press / right-click saves images directly. Tap to open raw image in a new tab.
+- **Recent cache view** — Cached entries hydrate as cards on page load (newest first), unified with fresh fetches. Pin to keep from LRU eviction, delete individually, or "Show in Finder" / "Open Folder" (loopback only).
 - **Inline results** — view transcripts, summaries, and translations directly in the UI with expand/collapse and save-to-file
 - **Playlist support** — paste a YouTube playlist URL, get all videos as cards with batch Download All / Transcribe All / Summarize All
 - **Flat-file cache** — normalized-URL-keyed cache avoids redundant downloads, transcriptions, and LLM calls. Size-configurable with LRU eviction
@@ -35,7 +36,7 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 - **Multi-video page support** — pages with multiple embedded videos (e.g. NYT articles) are handled correctly
 - **Nix flake** — reproducible dev environment, no venv needed
 - **Independently configurable backends** — separate URL, model, API key, and prompt for STT, summarization, translation, counterargument, and TTS
-- **164 tests** — config, cache, LLM client, media extractor, and API integration tests
+- **193 tests** — config, cache, LLM client, media extractor, service, and API integration tests
 
 ## Quick Start
 

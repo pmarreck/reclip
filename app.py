@@ -87,6 +87,8 @@ def _fetch_and_cache_metadata(url):
                         "uploader": info.get("uploader", info.get("channel", "Unknown")),
                         "upload_date": info.get("upload_date", "Unknown"),
                         "duration": info.get("duration", 0),
+                        "thumbnail": info.get("thumbnail", ""),
+                        "kind": "video",
                         "url": url,
                     }
                     cache._write_meta(url, meta)
@@ -683,6 +685,84 @@ def download_file(job_id):
 @app.route("/api/cache/stats")
 def cache_stats():
     return jsonify(cache.stats())
+
+
+@app.route("/api/cache/entries")
+def cache_entries():
+    """List all cache entries, most recent first.
+
+    Used by the frontend to render the "Recent" cards on page load. Each entry
+    includes presence flags (has_audio, has_transcript, etc.) so the UI can
+    show only the action buttons relevant to what's actually cached.
+    """
+    return jsonify({"entries": cache.list_entries()})
+
+
+@app.route("/api/cache/entry/<entry_hash>", methods=["DELETE"])
+def cache_delete_entry(entry_hash):
+    if not cache._is_safe_hash(entry_hash):
+        return jsonify({"error": "Bad hash"}), 400
+    ok = cache.delete_entry_by_hash(entry_hash)
+    if not ok:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/cache/entry/<entry_hash>/pin", methods=["POST"])
+def cache_pin_entry(entry_hash):
+    if not cache._is_safe_hash(entry_hash):
+        return jsonify({"error": "Bad hash"}), 400
+    body = request.get_json(silent=True) or {}
+    pinned = bool(body.get("pinned", True))
+    # Look up the URL from the existing entry's meta.json
+    entry_dir = os.path.join(cache.cache_dir, entry_hash)
+    meta_path = os.path.join(entry_dir, "meta.json")
+    if not os.path.isfile(meta_path):
+        return jsonify({"error": "Not found"}), 404
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return jsonify({"error": "Cache metadata unreadable"}), 500
+    url = meta.get("url", "")
+    if not url:
+        return jsonify({"error": "Cache entry has no URL"}), 400
+    cache.set_pinned(url, pinned)
+    return jsonify({"ok": True, "pinned": pinned})
+
+
+@app.route("/api/cache/clear", methods=["POST"])
+def cache_clear():
+    body = request.get_json(silent=True) or {}
+    keep_pinned = bool(body.get("keep_pinned", False))
+    removed = cache.clear_all(keep_pinned=keep_pinned)
+    return jsonify({"ok": True, "removed": removed})
+
+
+@app.route("/api/cache/entry/<entry_hash>/reveal", methods=["POST"])
+def cache_reveal_entry(entry_hash):
+    """Open the cache entry's directory in the OS file manager. Loopback-only —
+    we're invoking a GUI on the host machine, which doesn't make sense over
+    Tailscale and is also a small safety win (only the local user can spawn
+    `open`/`xdg-open` against arbitrary cache hashes)."""
+    if not _is_loopback(request):
+        return jsonify({"error": "Forbidden: reveal is only available via loopback"}), 403
+    if not cache._is_safe_hash(entry_hash):
+        return jsonify({"error": "Bad hash"}), 400
+    entry_dir = os.path.join(cache.cache_dir, entry_hash)
+    if not os.path.isdir(entry_dir):
+        return jsonify({"error": "Not found"}), 404
+    if sys.platform == "darwin":
+        opener = "open"
+    elif sys.platform.startswith("linux"):
+        opener = "xdg-open"
+    else:
+        return jsonify({"error": f"Reveal not supported on {sys.platform}"}), 400
+    try:
+        subprocess.run([opener, entry_dir], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True})
 
 
 @app.route("/api/config")

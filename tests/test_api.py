@@ -17,6 +17,127 @@ class TestCacheStatsEndpoint:
         assert "entry_count" in data
 
 
+class TestCacheEntriesEndpoints:
+    """GET /api/cache/entries — list of cache entries for the recents view.
+    DELETE /api/cache/entry/<hash> — purge one.
+    POST /api/cache/entry/<hash>/pin — toggle.
+    POST /api/cache/clear — wipe all (optionally keep pinned).
+    POST /api/cache/entry/<hash>/reveal — open parent dir, loopback-only."""
+
+    def test_entries_lists_most_recent_first(self, client, tmp_cache):
+        import app
+        app.cache.write_text("https://oldest.com", "transcript.txt", "old",
+                             meta={"url": "https://oldest.com", "title": "Oldest"})
+        time.sleep(0.01)
+        app.cache.write_text("https://newest.com", "transcript.txt", "new",
+                             meta={"url": "https://newest.com", "title": "Newest"})
+        resp = client.get("/api/cache/entries")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "entries" in data
+        titles = [e["title"] for e in data["entries"]]
+        assert titles == ["Newest", "Oldest"]
+
+    def test_delete_entry_removes_it(self, client, tmp_cache):
+        import app
+        from cache import cache_key
+        url = "https://to-delete.com"
+        app.cache.write_text(url, "transcript.txt", "x", meta={"url": url})
+        h = cache_key(url)
+        resp = client.delete(f"/api/cache/entry/{h}")
+        assert resp.status_code == 200
+        assert resp.get_json().get("ok") is True
+        # Re-listing returns no entries
+        resp2 = client.get("/api/cache/entries")
+        assert resp2.get_json()["entries"] == []
+
+    def test_delete_returns_404_for_unknown(self, client, tmp_cache):
+        resp = client.delete("/api/cache/entry/" + ("0" * 64))
+        assert resp.status_code == 404
+
+    def test_delete_rejects_traversal(self, client, tmp_cache):
+        # Flask routing strips '..' but the handler must still reject malformed hashes.
+        resp = client.delete("/api/cache/entry/notarealhash")
+        assert resp.status_code == 400
+
+    def test_pin_toggles_pinned_flag(self, client, tmp_cache):
+        import app
+        from cache import cache_key
+        url = "https://pin-me.com"
+        app.cache.write_text(url, "transcript.txt", "x", meta={"url": url})
+        h = cache_key(url)
+        resp = client.post(f"/api/cache/entry/{h}/pin",
+                           json={"pinned": True})
+        assert resp.status_code == 200
+        assert app.cache.read_meta(url).get("pinned") is True
+        # Toggle off
+        resp2 = client.post(f"/api/cache/entry/{h}/pin",
+                            json={"pinned": False})
+        assert resp2.status_code == 200
+        assert app.cache.read_meta(url).get("pinned") is False
+
+    def test_clear_all_wipes_cache(self, client, tmp_cache):
+        import app
+        app.cache.write_text("https://a.com", "x.txt", "a",
+                             meta={"url": "https://a.com"})
+        app.cache.write_text("https://b.com", "x.txt", "b",
+                             meta={"url": "https://b.com"})
+        resp = client.post("/api/cache/clear", json={"keep_pinned": False})
+        assert resp.status_code == 200
+        assert resp.get_json()["removed"] == 2
+        assert app.cache.list_entries() == []
+
+    def test_clear_all_keeps_pinned_when_requested(self, client, tmp_cache):
+        import app
+        app.cache.write_text("https://pin.com", "x.txt", "p",
+                             meta={"url": "https://pin.com"})
+        app.cache.set_pinned("https://pin.com", True)
+        app.cache.write_text("https://not.com", "x.txt", "n",
+                             meta={"url": "https://not.com"})
+        resp = client.post("/api/cache/clear", json={"keep_pinned": True})
+        assert resp.status_code == 200
+        assert resp.get_json()["removed"] == 1
+        entries = app.cache.list_entries()
+        assert len(entries) == 1
+        assert entries[0]["pinned"] is True
+
+    def test_reveal_loopback_gated(self, client, tmp_cache):
+        resp = client.post("/api/cache/entry/" + ("0" * 64) + "/reveal",
+                           environ_overrides={"REMOTE_ADDR": "8.8.8.8"})
+        assert resp.status_code == 403
+
+    def test_reveal_invokes_platform_opener(self, client, tmp_cache, monkeypatch):
+        """On macOS uses 'open <dir>'; on Linux uses 'xdg-open <dir>'."""
+        import app
+        from cache import cache_key
+        url = "https://reveal-me.com"
+        app.cache.write_text(url, "transcript.txt", "x", meta={"url": url})
+        h = cache_key(url)
+
+        calls = []
+
+        def fake_run(cmd, *args, **kwargs):
+            calls.append(list(cmd))
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        resp = client.post(f"/api/cache/entry/{h}/reveal")
+        assert resp.status_code == 200
+        assert len(calls) == 1
+        cmd = calls[0]
+        # First arg should be a platform opener, last arg should be the cache entry dir
+        assert cmd[0] in ("open", "xdg-open")
+        assert h in cmd[-1]
+
+    def test_reveal_returns_404_for_unknown_entry(self, client, tmp_cache):
+        resp = client.post("/api/cache/entry/" + ("0" * 64) + "/reveal")
+        assert resp.status_code == 404
+
+
 class TestCheckStatusExtendedFields:
     """Verify check_status now returns type and text fields."""
 
