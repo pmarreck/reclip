@@ -858,6 +858,9 @@
                 <button class="card-dl-btn done" style="${btnStyle}white-space:nowrap;" onclick="downloadAudio(${idx},'${op}','wav')">WAV</button>
               </div>`
             : '';
+          const audioErrorHtml = (opState.audioError && !opState.audioLoading && !opState.audioUrl)
+            ? `<div class="card-status error" style="margin-top:6px;font-size:0.6rem;line-height:1.4;">TTS: ${esc(opState.audioError)}</div>`
+            : '';
           opsHtml += `<div class="op-result">
             <div class="op-result-header">
               <span class="op-result-label">${label}</span>
@@ -869,6 +872,7 @@
               </div>
             </div>
             ${audioPlayerHtml}
+            ${audioErrorHtml}
             <div class="op-result-text${expanded ? ' expanded' : ''}">${esc(text)}</div>
           </div>`;
         } else if (opState.status === 'error') {
@@ -1206,6 +1210,7 @@
       if (!op) return;
 
       op.audioLoading = true;
+      op.audioError = null;  // clear stale error on retry
       renderCard(idx);
 
       // Map op key to API source param
@@ -1267,11 +1272,16 @@
           } else if (data.status === 'error' || data.error) {
             es.close();
             op.audioLoading = false;
-            op.audioError = data.error;
+            op.audioError = data.error || 'Speech generation failed';
             renderCard(idx);
           }
         };
-        es.onerror = () => { es.close(); op.audioLoading = false; renderCard(idx); };
+        es.onerror = () => {
+          es.close();
+          op.audioLoading = false;
+          op.audioError = op.audioError || 'Lost connection to TTS job';
+          renderCard(idx);
+        };
       } else {
         _pollFallback(`/api/status/${jobId}`, 2000, async (data) => {
           if (data.status === 'done') {
@@ -1283,10 +1293,15 @@
             return true;
           } else if (data.status === 'error') {
             op.audioLoading = false;
+            op.audioError = data.error || 'Speech generation failed';
             renderCard(idx);
             return true;
           }
-        }, () => { op.audioLoading = false; renderCard(idx); });
+        }, () => {
+          op.audioLoading = false;
+          op.audioError = op.audioError || 'Lost connection to TTS job';
+          renderCard(idx);
+        });
       }
     }
 
