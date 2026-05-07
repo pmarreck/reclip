@@ -796,6 +796,34 @@ class TestServiceEndpoints:
         assert isinstance(data["is_running_as_service"], bool)
 
 
+class TestServerLog:
+    """A minimal stderr logger so long-running ops produce visible feedback
+    in the terminal beyond Werkzeug's per-request lines."""
+
+    def test_log_emits_to_stderr_with_tag_and_timestamp(self, capsys):
+        import app, re
+        app._log("summarize", "started for url=https://example.com")
+        captured = capsys.readouterr()
+        assert "[summarize]" in captured.err
+        assert "started for url=https://example.com" in captured.err
+        # HH:MM:SS prefix in brackets
+        assert re.search(r"\[\d{2}:\d{2}:\d{2}\]", captured.err)
+
+    def test_log_does_not_pollute_stdout(self, capsys):
+        import app
+        app._log("test", "stderr only")
+        captured = capsys.readouterr()
+        assert captured.out == ""
+
+    def test_log_handles_format_args(self, capsys):
+        """_log accepts %-style formatting like logging.info."""
+        import app
+        app._log("transcribe", "duration=%.1fs chars=%d", 12.34, 5678)
+        err = capsys.readouterr().err
+        assert "duration=12.3s" in err
+        assert "chars=5678" in err
+
+
 class TestRestartEndpoint:
     """POST /api/restart schedules a clean process exit. Loopback-only.
     Under launchd/systemd the supervisor respawns the process. Under

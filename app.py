@@ -56,6 +56,20 @@ def _is_loopback(req):
     return addr in ("127.0.0.1", "::1", "localhost")
 
 
+def _log(tag, msg, *args):
+    """Emit a tagged, timestamped line to stderr.
+
+    Used to surface long-running op lifecycle (start / done / error / cache
+    hit) so the operator can see what's happening from the terminal without
+    having to watch the UI. Format: '[HH:MM:SS] [tag] message'.
+    """
+    if args:
+        msg = msg % args
+    ts = time.strftime("%H:%M:%S")
+    sys.stderr.write(f"[{ts}] [{tag}] {msg}\n")
+    sys.stderr.flush()
+
+
 def _format_duration(seconds):
     """Format seconds into H:MM:SS or M:SS."""
     if not seconds:
@@ -267,8 +281,12 @@ def run_download(job_id, url, format_choice, format_id):
 
 def _run_transcribe(job_id, url):
     job = jobs[job_id]
+    _log("transcribe", "start job=%s model=%s url=%s", job_id, cfg["stt_model"], url)
     try:
         audio_path = _ensure_audio(url)
+        size_mb = os.path.getsize(audio_path) / (1024 * 1024) if os.path.isfile(audio_path) else 0
+        _log("transcribe", "audio ready (%.1f MB), calling STT", size_mb)
+        t0 = time.time()
         result = llm_transcribe(
             audio_path=audio_path,
             url=cfg["stt_url"],
@@ -281,18 +299,22 @@ def _run_transcribe(job_id, url):
         job["status"] = "done"
         job["text"] = transcript
         job["filename"] = "transcript.txt"
+        _log("transcribe", "done in %.1fs (%d chars)", time.time() - t0, len(transcript))
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        _log("transcribe", "ERROR: %s", e)
 
 
 def _run_summarize(job_id, url):
     job = jobs[job_id]
+    _log("summarize", "start job=%s model=%s url=%s", job_id, cfg["summarize_model"], url)
     try:
-        # Ensure transcript exists first
         transcript = cache.read_text(url, "transcript.txt")
         if transcript is None:
+            _log("summarize", "no transcript cached — fetching audio + STT first")
             audio_path = _ensure_audio(url)
+            t0 = time.time()
             result = llm_transcribe(
                 audio_path=audio_path,
                 url=cfg["stt_url"],
@@ -303,6 +325,9 @@ def _run_summarize(job_id, url):
             )
             transcript = result["text"]
             cache.write_text(url, "transcript.txt", transcript)
+            _log("summarize", "STT done in %.1fs (%d chars)", time.time() - t0, len(transcript))
+        _log("summarize", "calling LLM (transcript=%d chars)", len(transcript))
+        t0 = time.time()
         summary = chat_completion(
             url=cfg["summarize_url"],
             model=cfg["summarize_model"],
@@ -315,16 +340,20 @@ def _run_summarize(job_id, url):
         job["status"] = "done"
         job["text"] = summary
         job["filename"] = "summary.txt"
+        _log("summarize", "done in %.1fs (%d chars)", time.time() - t0, len(summary))
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        _log("summarize", "ERROR: %s", e)
 
 
 def _run_counterargue(job_id, url):
     job = jobs[job_id]
+    _log("counterargue", "start job=%s model=%s url=%s", job_id, cfg["counterargue_model"], url)
     try:
         transcript = cache.read_text(url, "transcript.txt")
         if transcript is None:
+            _log("counterargue", "no transcript cached — fetching audio + STT first")
             audio_path = _ensure_audio(url)
             result = llm_transcribe(
                 audio_path=audio_path,
@@ -335,6 +364,8 @@ def _run_counterargue(job_id, url):
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
             )
             transcript = _save_transcript(url, result["text"])
+        _log("counterargue", "calling LLM (transcript=%d chars)", len(transcript))
+        t0 = time.time()
         counterargument = chat_completion(
             url=cfg["counterargue_url"],
             model=cfg["counterargue_model"],
@@ -347,23 +378,28 @@ def _run_counterargue(job_id, url):
         job["status"] = "done"
         job["text"] = counterargument
         job["filename"] = "counterargue.txt"
+        _log("counterargue", "done in %.1fs (%d chars)", time.time() - t0, len(counterargument))
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        _log("counterargue", "ERROR: %s", e)
 
 
 def _run_translate(job_id, url, language, source):
     job = jobs[job_id]
+    _log("translate", "start job=%s lang=%s source=%s model=%s url=%s",
+         job_id, language, source, cfg["translate_model"], url)
     try:
-        # Ensure source text exists
         if source == "summary":
             source_text = cache.read_text(url, "summary.txt")
             if source_text is None:
+                _log("translate", "no summary cached — running summarize first")
                 _run_summarize_sync(url)
                 source_text = cache.read_text(url, "summary.txt")
         else:
             source_text = cache.read_text(url, "transcript.txt")
             if source_text is None:
+                _log("translate", "no transcript cached — fetching audio + STT first")
                 audio_path = _ensure_audio(url)
                 result = llm_transcribe(
                     audio_path=audio_path,
@@ -381,6 +417,8 @@ def _run_translate(job_id, url, language, source):
         prompt_template = cfg["translate_prompt"]
         system_prompt = prompt_template.replace("{language}", language)
 
+        _log("translate", "calling LLM (source=%d chars → %s)", len(source_text), language)
+        t0 = time.time()
         translation = chat_completion(
             url=cfg["translate_url"],
             model=cfg["translate_model"],
@@ -394,9 +432,11 @@ def _run_translate(job_id, url, language, source):
         job["status"] = "done"
         job["text"] = translation
         job["filename"] = filename
+        _log("translate", "done in %.1fs (%d chars)", time.time() - t0, len(translation))
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        _log("translate", "ERROR: %s", e)
 
 
 @app.route("/")
@@ -413,6 +453,8 @@ def _info_images(url):
     Keeping this synchronous-but-fast (<10s typical) avoids tying up the
     request thread for the full carousel download (30-60s).
     """
+    _log("info-images", "gallery-dl --dump-json url=%s", url)
+    t0 = time.time()
     try:
         items = media_extractor.dump_images(
             url,
@@ -421,6 +463,7 @@ def _info_images(url):
             timeout=30,
         )
     except RuntimeError as e:
+        _log("info-images", "ERROR after %.1fs: %s", time.time() - t0, e)
         return jsonify({"error": str(e)}), 400
     except subprocess.TimeoutExpired:
         return jsonify({"error": "Timed out fetching image metadata"}), 400
@@ -441,6 +484,7 @@ def _info_images(url):
         })
 
     cache._write_meta(url, {"url": url, "kind": "images", "item_count": len(out)})
+    _log("info-images", "done in %.1fs (%d items)", time.time() - t0, len(out))
     return jsonify({"kind": "images", "items": out, "entry_hash": h})
 
 
@@ -1182,8 +1226,9 @@ def _resolve_voice_reference(url):
 
 def _run_speak(job_id, url, source, voice_override):
     job = jobs[job_id]
+    _log("speak", "start job=%s model=%s source=%s url=%s",
+         job_id, cfg["tts_model"], source, url)
     try:
-        # Resolve which text to speak
         source_map = {
             "transcript": "transcript.txt",
             "summary": "summary.txt",
@@ -1215,21 +1260,20 @@ def _run_speak(job_id, url, source, voice_override):
         cache_key_voice = voice_str or ref_path
         tts_filename = _tts_cache_filename(text, cache_key_voice)
 
-        # Check TTS cache
         if cache.has_file(url, tts_filename):
             job["status"] = "done"
             job["file"] = cache.entry_path(url, tts_filename)
             job["filename"] = f"{source}.wav"
+            _log("speak", "cache hit — returning %s", tts_filename)
             return
 
-        # Chunk long text to avoid Qwen3-TTS drift on >300 chars
-        # (github.com/QwenLM/Qwen3-TTS issues #80, #239). Each chunk gets
-        # the SAME ref_audio + ref_text, which is what voice-cloning models
-        # need for consistency across calls.
         chunks = _chunk_text_for_tts(text, max_chars=300)
+        _log("speak", "synthesizing %d chunks (text=%d chars)", len(chunks), len(text))
+        t0 = time.time()
         chunk_wavs = []
         for i, chunk in enumerate(chunks):
             job["progress"] = f"chunk {i+1}/{len(chunks)}"
+            chunk_t0 = time.time()
             chunk_wav = text_to_speech(
                 url=cfg["tts_url"],
                 model=cfg["tts_model"],
@@ -1241,6 +1285,7 @@ def _run_speak(job_id, url, source, voice_override):
                 api_key_hint="RECLIP_TTS_API_KEY or RECLIP_API_KEY",
             )
             chunk_wavs.append(chunk_wav)
+            _log("speak", "chunk %d/%d done in %.1fs", i + 1, len(chunks), time.time() - chunk_t0)
 
         # Concatenate WAV chunks into single output
         out_path = cache.entry_path(url, tts_filename)
@@ -1260,9 +1305,11 @@ def _run_speak(job_id, url, source, voice_override):
         job["status"] = "done"
         job["file"] = out_path
         job["filename"] = f"{source}.wav"
+        _log("speak", "done in %.1fs", time.time() - t0)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
+        _log("speak", "ERROR: %s", e)
 
 
 @app.route("/api/speak", methods=["POST"])
