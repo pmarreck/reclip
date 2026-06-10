@@ -37,7 +37,28 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "speakrs-ffi": "speakrs-ffi"
+      }
+    },
+    "speakrs-ffi": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1781124153,
+        "narHash": "sha256-tBYAQhyvFSlVrpT8s34XK8QNM8FQBvreM1fxWM9nRvE=",
+        "owner": "pmarreck",
+        "repo": "speakrs_ffi",
+        "rev": "78278275f78c17a158ca15d7aaaff213cf197e64",
+        "type": "github"
+      },
+      "original": {
+        "owner": "pmarreck",
+        "repo": "speakrs_ffi",
+        "type": "github"
       }
     },
     "systems": {

@@ -4,9 +4,15 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    # Speaker diarization C FFI (sibling project). Provides lib/include/bin;
+    # consumed via ctypes in diarizer.py.
+    speakrs-ffi = {
+      url = "github:pmarreck/speakrs_ffi";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, speakrs-ffi }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
@@ -23,6 +29,13 @@
           pytest
           responses
         ]);
+
+        # speakrs_ffi only targets aarch64-darwin + {x86_64,aarch64}-linux;
+        # degrade gracefully elsewhere (diarization simply unavailable).
+        speakrsPkg = speakrs-ffi.packages.${system}.default or null;
+        speakrsLib = if speakrsPkg == null then "" else
+          "${speakrsPkg}/lib/libspeakrs_ffi${if pkgs.stdenv.isDarwin then ".dylib" else ".so"}";
+        speakrsOrtLib = if speakrsPkg == null then "" else speakrsPkg.passthru.ortLib;
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
@@ -40,7 +53,8 @@
             cp -r app.py config.py cache.py llm_client.py service.py media_extractor.py templates static assets $out/share/reclip/
             makeWrapper ${pythonEnv}/bin/python $out/bin/reclip \
               --add-flags "$out/share/reclip/app.py" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp pkgs.gallery-dl ]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.ffmpeg pkgs.yt-dlp pkgs.gallery-dl ]} \
+              ${pkgs.lib.optionalString (speakrsPkg != null) ''--set-default RECLIP_SPEAKRS_LIB "${speakrsLib}" --set-default ORT_DYLIB_PATH "${speakrsOrtLib}"''}
           '';
         };
 
@@ -53,6 +67,10 @@
           ];
 
           shellHook = ''
+            ${pkgs.lib.optionalString (speakrsPkg != null) ''
+              export RECLIP_SPEAKRS_LIB="''${RECLIP_SPEAKRS_LIB:-${speakrsLib}}"
+              export ORT_DYLIB_PATH="''${ORT_DYLIB_PATH:-${speakrsOrtLib}}"
+            ''}
             echo "ReClip dev shell — python, flask, yt-dlp, gallery-dl, ffmpeg all available"
             echo "Run: python app.py"
           '';
