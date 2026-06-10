@@ -15,17 +15,16 @@
 ## Speaker diarization + naming (engine shipped as sibling project speakrs_ffi)
 - [x] speakrs_ffi sibling project: C FFI around speakrs, Garnix-built
       (2026-06-10 EST: 21.5-min video → 5.8s warm, 8 speakers, 207 turns)
-- [ ] reclip flake input `speakrs-ffi` + wire dylib path & ORT_DYLIB_PATH into env
-- [ ] diarizer.py: ctypes binding (ffmpeg → f32le mono 16k PCM → JSON turns);
-      unit tests against a stub dylib, gated integration test with real models
-- [ ] llm_client.transcribe: stop discarding `segments` (oMLX already returns them)
-- [ ] merge step (pure function): transcript segments × speaker turns → max-overlap
-      assignment → diarized transcript ("SPEAKER_00: text" lines + timestamps)
-- [ ] naming step: chat-completion prompt (diarized transcript + video metadata →
-      JSON {SPEAKER_NN: {name, confidence, evidence}}); threshold gating; works
-      against any OpenAI-compatible endpoint (oMLX now, Ollama via URL config)
-- [ ] UI: "Speakers" toggle on transcript card; diarized transcript becomes a
-      `source` the actions registry can chain from
+- [x] reclip flake input `speakrs-ffi` + dylib/ORT env wiring (2026-06-10 EST)
+- [x] diarizer.py ctypes binding, 13 tests incl. real-dylib tier (2026-06-10 EST)
+- [x] llm_client.transcribe returns segments; cached as transcript_segments.json (2026-06-10 EST)
+- [x] speakers.py merge/format/label-map, mutation-validated (2026-06-10 EST)
+- [x] naming via configured chat endpoint, confidence-gated (2026-06-10 EST)
+- [x] /api/diarize + Speakers button; live e2e verified: 21.5-min video → 8 speakers,
+      2 confidently named (Herndon/Winder), 6 correctly left generic (2026-06-10 EST)
+- [ ] diarized transcript as an actions-registry `source` (after actions phase 1-2)
+- [ ] consider word_timestamps for finer merge alignment (interjections sometimes
+      land in the neighboring speaker's block at segment granularity)
 
 ## Notes
 - TTS voice quality unsatisfying with current Qwen3-TTS VoiceDesign — revisit
