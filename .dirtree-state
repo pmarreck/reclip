@@ -1,0 +1,7 @@
+# Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
+ver=1.2
+annotate=[
+	actions.py = Hot-reloadable LLM action registry (actions.json): id/name/source/system_prompt/params; source chains; cycle+dup validation; last_error for UI
+	secrets.ini.example = Template for ~/.config/reclip+/secrets.ini — API keys for service processes that lack shell env
+	tests/test_actions.py = 22 tests: defaults match config.py prompts, source chains, cycle/dup/malformed validation, hot-reload last-good
+]
