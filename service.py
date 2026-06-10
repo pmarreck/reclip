@@ -16,8 +16,10 @@ LINUX_UNIT_NAME = "reclip.service"
 
 # Only these env vars get baked into the service file.
 # PATH is included so the service can find ffmpeg and yt-dlp from nix store.
+# ORT_DYLIB_PATH lets diarization's cpu/cuda modes dlopen ONNX Runtime
+# (RECLIP_SPEAKRS_LIB itself is covered by the RECLIP_ prefix).
 ENV_ALLOWLIST_PREFIXES = ("RECLIP_",)
-ENV_ALLOWLIST_EXACT = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CACHE_HOME", "XDG_CONFIG_HOME")
+ENV_ALLOWLIST_EXACT = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "ORT_DYLIB_PATH")
 
 
 def detect_platform():

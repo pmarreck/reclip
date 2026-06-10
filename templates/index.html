@@ -834,6 +834,7 @@
       if (c.status === 'ready') {
         actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>
           <button class="card-dl-btn card-btn-alt" onclick="transcribeCard(${idx})">Transcribe</button>
+          <button class="card-dl-btn card-btn-alt" onclick="speakersCard(${idx})">Speakers</button>
           <button class="card-dl-btn card-btn-alt" onclick="summarizeCard(${idx})">Summarize</button>
           <button class="card-dl-btn card-btn-alt" onclick="toggleTranslate(${idx})">Translate</button>
           <button class="card-dl-btn card-btn-alt" onclick="counterargueCard(${idx})">Counterargue</button>
@@ -850,7 +851,7 @@
 
       // Per-operation status indicators
       let opsHtml = '';
-      for (const op of ['transcribe', 'summarize', 'translate_transcript', 'translate_summary', 'counterargue']) {
+      for (const op of ['transcribe', 'speakers', 'summarize', 'translate_transcript', 'translate_summary', 'counterargue']) {
         const opState = c.ops?.[op];
         if (!opState) continue;
         const label = op.replace(/_/g, ' ');
@@ -1411,6 +1412,37 @@
         pollOp(idx, 'summarize', data.job_id);
       } catch (err) {
         c.ops.summarize = { status: 'error', error: err.message };
+        renderCard(idx);
+      }
+    }
+
+    async function speakersCard(idx) {
+      const c = cardData[idx];
+      _initOps(idx);
+      c.ops.speakers = { status: 'processing' };
+      renderCard(idx);
+
+      try {
+        const res = await fetch('/api/diarize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: c.url, title: c.title || '' }),
+        });
+        const data = await res.json();
+        if (data.error) {
+          c.ops.speakers = { status: 'error', error: data.error };
+          renderCard(idx);
+          return;
+        }
+        if (data.cached) {
+          c.ops.speakers = { status: 'done', text: data.text, jobId: null };
+          renderCard(idx);
+          return;
+        }
+        c.ops.speakers.jobId = data.job_id;
+        pollOp(idx, 'speakers', data.job_id);
+      } catch (err) {
+        c.ops.speakers = { status: 'error', error: err.message };
         renderCard(idx);
       }
     }

@@ -18,6 +18,11 @@ from llm_client import transcribe as llm_transcribe, chat_completion, text_to_sp
 from service import ServiceManager, is_running_as_service
 import media_extractor
 from media_extractor import classify_url
+from diarizer import diarize_file, DiarizerError, available as diarizer_available
+from speakers import (
+    merge_speakers, format_diarized, speaker_label_map,
+    build_naming_prompt, parse_naming_response, apply_names,
+)
 
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
@@ -389,6 +394,96 @@ def _run_counterargue(job_id, url):
         job["status"] = "error"
         job["error"] = str(e)
         _log("counterargue", "ERROR: %s", e)
+
+
+def _run_diarize(job_id, url):
+    """Diarization pipeline: transcript segments × speakrs speaker turns →
+    merged, speaker-labeled transcript; then a best-effort LLM pass names the
+    speakers from context cues (self-intros, address terms, video metadata).
+    Naming failure is non-fatal — generic 'Speaker N' labels remain."""
+    job = jobs[job_id]
+    _log("diarize", "start job=%s url=%s", job_id, url)
+    try:
+        # 1. Transcript segments (auto-chain transcription if missing)
+        seg_raw = cache.read_text(url, "transcript_segments.json")
+        if seg_raw is None:
+            _log("diarize", "no cached segments — running transcription first")
+            audio_path = _ensure_audio(url)
+            t0 = time.time()
+            result = llm_transcribe(
+                audio_path=audio_path,
+                url=cfg["stt_url"],
+                model=cfg["stt_model"],
+                api_key=cfg["stt_api_key"],
+                prompt=cfg["stt_prompt"],
+                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            )
+            _save_transcript(url, result["text"], segments=result.get("segments"))
+            seg_raw = json.dumps(result.get("segments") or [])
+            _log("diarize", "STT done in %.1fs", time.time() - t0)
+        transcript_segments = json.loads(seg_raw)
+        if not transcript_segments:
+            raise RuntimeError(
+                "STT backend returned no segment timestamps — diarization "
+                "needs them (oMLX Whisper models provide segments)"
+            )
+
+        # 2. Speaker turns from the audio (speakrs via C FFI)
+        audio_path = _ensure_audio(url)
+        job["progress"] = "diarizing"
+        t0 = time.time()
+        diar = diarize_file(audio_path)
+        _log("diarize", "diarization done in %.1fs (%d speakers, %d turns)",
+             time.time() - t0, len(diar["speakers"]), len(diar["segments"]))
+
+        # 3. Merge + base formatting
+        merged = merge_speakers(transcript_segments, diar["segments"])
+        base_text = format_diarized(merged)
+        labels = speaker_label_map(merged)
+
+        # 4. Name speakers via the configured chat model (non-fatal)
+        names = {}
+        naming_error = None
+        if labels:
+            job["progress"] = "naming speakers"
+            try:
+                meta = _fetch_and_cache_metadata(url)
+                system_prompt, user_content = build_naming_prompt(base_text, meta)
+                t0 = time.time()
+                resp_text = chat_completion(
+                    url=cfg["summarize_url"],
+                    model=cfg["summarize_model"],
+                    api_key=cfg["summarize_api_key"],
+                    system_prompt=system_prompt,
+                    user_content=user_content,
+                    api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
+                )
+                naming = parse_naming_response(resp_text)
+                names = apply_names(labels, naming)
+                _log("diarize", "naming done in %.1fs: %s", time.time() - t0,
+                     names or "(no confident names)")
+            except Exception as e:
+                naming_error = str(e)
+                _log("diarize", "naming failed (non-fatal): %s", e)
+
+        final_text = format_diarized(merged, names=names) if names else base_text
+        full = _metadata_header(url) + final_text
+        cache.write_text(url, "transcript_diarized.txt", full)
+        cache.write_text(url, "speakers.json", json.dumps({
+            "turns": diar["segments"],
+            "speakers": diar["speakers"],
+            "labels": labels,
+            "names": names,
+            "naming_error": naming_error,
+        }))
+        job["status"] = "done"
+        job["text"] = full
+        job["filename"] = "transcript_diarized.txt"
+        _log("diarize", "done (%d chars, %d named speakers)", len(full), len(names))
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+        _log("diarize", "ERROR: %s", e)
 
 
 def _run_translate(job_id, url, language, source):
@@ -982,6 +1077,28 @@ def transcribe_endpoint():
     jobs[job_id] = {"status": "processing", "type": "text", "url": url}
 
     thread = threading.Thread(target=_run_transcribe, args=(job_id, url))
+    thread.daemon = True
+    thread.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/diarize", methods=["POST"])
+def diarize_endpoint():
+    data = request.json
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+
+    # Check cache first
+    cached_text = cache.read_text(url, "transcript_diarized.txt")
+    if cached_text is not None:
+        return jsonify({"cached": True, "text": cached_text})
+
+    job_id = uuid.uuid4().hex[:10]
+    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
+
+    thread = threading.Thread(target=_run_diarize, args=(job_id, url))
     thread.daemon = True
     thread.start()
 

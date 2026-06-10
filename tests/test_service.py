@@ -239,3 +239,13 @@ class TestServiceManager:
 			"platform", "supported", "installed", "running",
 			"service_path", "is_running_as_service",
 		}
+
+
+class TestOrtDylibPathCaptured:
+	def test_ort_dylib_path_in_captured_env(self, monkeypatch):
+		"""Diarization's cpu/cuda modes dlopen ONNX Runtime via ORT_DYLIB_PATH;
+		the service file must carry it since launchd has no shell env."""
+		from service import _captured_env
+		monkeypatch.setenv("ORT_DYLIB_PATH", "/nix/store/x/libonnxruntime.dylib")
+		env = _captured_env()
+		assert env.get("ORT_DYLIB_PATH") == "/nix/store/x/libonnxruntime.dylib"

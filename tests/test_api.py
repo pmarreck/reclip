@@ -1007,3 +1007,112 @@ class TestTranscriptSegments:
         app._save_transcript(url, "plain text")
         assert app.cache.read_text(url, "transcript_segments.json") is None
         assert app.cache.read_text(url, "transcript.txt") is not None
+
+
+class TestDiarizeEndpoint:
+    """POST /api/diarize — transcript segments × speakrs turns → named,
+    diarized transcript. Diarizer + naming LLM are injected via monkeypatch."""
+
+    URL = "https://example.com/diarize-me"
+    SEGMENTS = [
+        {"start": 0.0, "end": 4.0, "text": "Hello, I am Alice and this is my show."},
+        {"start": 5.0, "end": 9.0, "text": "Thanks Alice, I'm Bob, happy to be here."},
+        {"start": 10.0, "end": 13.0, "text": "Let's get started then."},
+    ]
+    TURNS = {
+        "segments": [
+            {"start": 0.1, "end": 4.2, "speaker": "SPEAKER_00"},
+            {"start": 4.9, "end": 9.3, "speaker": "SPEAKER_01"},
+            {"start": 9.8, "end": 13.1, "speaker": "SPEAKER_00"},
+        ],
+        "speakers": ["SPEAKER_00", "SPEAKER_01"],
+    }
+    NAMING_RESPONSE = json.dumps({
+        "Speaker 1": {"name": "Alice", "confidence": 0.95, "evidence": "self-intro"},
+        "Speaker 2": {"name": "Bob", "confidence": 0.9, "evidence": "self-intro"},
+    })
+
+    def _seed(self, app, monkeypatch):
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata",
+                            lambda u: {"title": "Alice Show", "uploader": "alice",
+                                       "url": u})
+        app.cache.write_text(self.URL, "transcript.txt", "seeded",
+                             meta={"url": self.URL, "title": "Alice Show"})
+        app.cache.write_text(self.URL, "transcript_segments.json",
+                             json.dumps(self.SEGMENTS))
+        with open(app.cache.entry_path(self.URL, "audio.mp3"), "wb") as f:
+            f.write(b"\x00fakeaudio")
+
+    def _poll(self, client, job_id):
+        for _ in range(100):
+            data = client.get(f"/api/status/{job_id}").get_json()
+            if data["status"] != "processing":
+                return data
+            time.sleep(0.02)
+        return data
+
+    def test_no_url_returns_400(self, client, tmp_cache):
+        resp = client.post("/api/diarize", json={})
+        assert resp.status_code == 400
+
+    def test_cached_short_circuit(self, client, tmp_cache):
+        import app
+        app.cache.write_text(self.URL, "transcript_diarized.txt", "Alice: cached!")
+        resp = client.post("/api/diarize", json={"url": self.URL})
+        data = resp.get_json()
+        assert data.get("cached") is True
+        assert data["text"] == "Alice: cached!"
+
+    def test_full_pipeline_names_speakers(self, client, tmp_cache, monkeypatch):
+        import app
+        self._seed(app, monkeypatch)
+        monkeypatch.setattr(app, "diarize_file", lambda path, **kw: self.TURNS)
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: self.NAMING_RESPONSE)
+
+        resp = client.post("/api/diarize", json={"url": self.URL})
+        job_id = resp.get_json()["job_id"]
+        data = self._poll(client, job_id)
+
+        assert data["status"] == "done", data.get("error")
+        assert "Alice:" in data["text"]
+        assert "Bob:" in data["text"]
+        # A-B-A: Alice speaks first and last
+        assert data["text"].index("Alice:") < data["text"].index("Bob:")
+
+        cached = app.cache.read_text(self.URL, "transcript_diarized.txt")
+        assert cached is not None and "Alice:" in cached
+        spk = json.loads(app.cache.read_text(self.URL, "speakers.json"))
+        assert spk["names"] == {"SPEAKER_00": "Alice", "SPEAKER_01": "Bob"}
+        assert spk["labels"] == {"Speaker 1": "SPEAKER_00", "Speaker 2": "SPEAKER_01"}
+
+    def test_naming_failure_is_nonfatal(self, client, tmp_cache, monkeypatch):
+        import app
+        self._seed(app, monkeypatch)
+        monkeypatch.setattr(app, "diarize_file", lambda path, **kw: self.TURNS)
+
+        def boom(**kw):
+            raise RuntimeError("LLM unreachable")
+        monkeypatch.setattr(app, "chat_completion", boom)
+
+        resp = client.post("/api/diarize", json={"url": self.URL})
+        data = self._poll(client, resp.get_json()["job_id"])
+        assert data["status"] == "done", data.get("error")
+        # Falls back to generic labels
+        assert "Speaker 1:" in data["text"]
+        spk = json.loads(app.cache.read_text(self.URL, "speakers.json"))
+        assert spk["names"] == {}
+        assert "LLM unreachable" in (spk.get("naming_error") or "")
+
+    def test_diarizer_error_surfaces(self, client, tmp_cache, monkeypatch):
+        import app
+        from diarizer import DiarizerError
+        self._seed(app, monkeypatch)
+
+        def no_lib(path, **kw):
+            raise DiarizerError("set RECLIP_SPEAKRS_LIB to libspeakrs_ffi")
+        monkeypatch.setattr(app, "diarize_file", no_lib)
+
+        resp = client.post("/api/diarize", json={"url": self.URL})
+        data = self._poll(client, resp.get_json()["job_id"])
+        assert data["status"] == "error"
+        assert "RECLIP_SPEAKRS_LIB" in data["error"]
