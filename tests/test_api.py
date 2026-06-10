@@ -980,3 +980,30 @@ class TestDownloadAll:
     def test_download_all_404_for_unknown(self, client, tmp_cache):
         resp = client.get("/api/download-all/deadbeef00")
         assert resp.status_code == 404
+
+
+class TestTranscriptSegments:
+    """_save_transcript must persist per-segment timestamps when the STT
+    backend provides them — the diarization merge aligns against these."""
+
+    def test_save_transcript_stores_segments_json(self, tmp_cache, monkeypatch):
+        import app
+        import json as _json
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata",
+                            lambda u: {"title": "T", "uploader": "U"})
+        url = "https://example.com/seg-test"
+        segs = [{"start": 0.0, "end": 1.5, "text": "hello"},
+                {"start": 2.0, "end": 4.0, "text": "world"}]
+        app._save_transcript(url, "hello world", segments=segs)
+        raw = app.cache.read_text(url, "transcript_segments.json")
+        assert raw is not None
+        assert _json.loads(raw) == segs
+
+    def test_save_transcript_without_segments_writes_no_json(self, tmp_cache, monkeypatch):
+        import app
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata",
+                            lambda u: {"title": "T", "uploader": "U"})
+        url = "https://example.com/no-seg-test"
+        app._save_transcript(url, "plain text")
+        assert app.cache.read_text(url, "transcript_segments.json") is None
+        assert app.cache.read_text(url, "transcript.txt") is not None

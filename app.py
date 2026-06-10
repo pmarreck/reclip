@@ -155,10 +155,17 @@ def _ensure_audio(url):
     return audio_path
 
 
-def _save_transcript(url, raw_text):
-    """Prepend metadata header and cache the transcript. Returns full text."""
+def _save_transcript(url, raw_text, segments=None):
+    """Prepend metadata header and cache the transcript. Returns full text.
+
+    `segments` (list of {start, end, text} from the STT backend) is cached
+    as transcript_segments.json — the diarization merge step aligns speaker
+    turns against these timestamps.
+    """
     full = _metadata_header(url) + raw_text
     cache.write_text(url, "transcript.txt", full)
+    if segments:
+        cache.write_text(url, "transcript_segments.json", json.dumps(segments))
     return full
 
 
@@ -182,7 +189,7 @@ def _run_summarize_sync(url):
             prompt=cfg["stt_prompt"],
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
-        transcript = _save_transcript(url, result["text"])
+        transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
     summary = chat_completion(
         url=cfg["summarize_url"],
         model=cfg["summarize_model"],
@@ -295,7 +302,7 @@ def _run_transcribe(job_id, url):
             prompt=cfg["stt_prompt"],
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
         )
-        transcript = _save_transcript(url, result["text"])
+        transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
         job["status"] = "done"
         job["text"] = transcript
         job["filename"] = "transcript.txt"
@@ -323,8 +330,7 @@ def _run_summarize(job_id, url):
                 prompt=cfg["stt_prompt"],
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
             )
-            transcript = result["text"]
-            cache.write_text(url, "transcript.txt", transcript)
+            transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
             _log("summarize", "STT done in %.1fs (%d chars)", time.time() - t0, len(transcript))
         _log("summarize", "calling LLM (transcript=%d chars)", len(transcript))
         t0 = time.time()
@@ -363,7 +369,7 @@ def _run_counterargue(job_id, url):
                 prompt=cfg["stt_prompt"],
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
             )
-            transcript = _save_transcript(url, result["text"])
+            transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
         _log("counterargue", "calling LLM (transcript=%d chars)", len(transcript))
         t0 = time.time()
         counterargument = chat_completion(
@@ -409,7 +415,7 @@ def _run_translate(job_id, url, language, source):
                     prompt=cfg["stt_prompt"],
                     api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
                 )
-                source_text = _save_transcript(url, result["text"])
+                source_text = _save_transcript(url, result["text"], segments=result.get("segments"))
 
         if source_text is None:
             raise RuntimeError(f"Could not obtain {source} text")

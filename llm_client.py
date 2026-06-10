@@ -96,6 +96,7 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 					"text": result.get("text", ""),
 					"language": result.get("language"),
 					"duration": result.get("duration"),
+					"segments": result.get("segments"),
 				}
 			# Still failing — re-extract the error message
 			try:
@@ -114,6 +115,7 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 		"text": result.get("text", ""),
 		"language": result.get("language"),
 		"duration": result.get("duration"),
+		"segments": result.get("segments"),
 	}
 
 

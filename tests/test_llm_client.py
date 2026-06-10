@@ -31,6 +31,55 @@ class TestTranscribe:
 		assert b"fake audio data" in req.body
 
 	@responses.activate
+	def test_transcribe_returns_segments(self, tmp_path):
+		"""oMLX includes per-segment timestamps; we must not discard them —
+		the diarization merge step aligns speaker turns against these."""
+		from llm_client import transcribe
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		segments = [
+			{"start": 0.0, "end": 4.2, "text": "Hello there."},
+			{"start": 4.8, "end": 9.1, "text": "And welcome back."},
+		]
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "Hello there. And welcome back.", "language": "en",
+			      "duration": 9.1, "segments": segments},
+			status=200,
+		)
+
+		result = transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper",
+			api_key="",
+			prompt="",
+		)
+		assert result["segments"] == segments
+
+	@responses.activate
+	def test_transcribe_segments_absent_is_none(self, tmp_path):
+		"""Older/other servers may omit segments — surface as None, not KeyError."""
+		from llm_client import transcribe
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "ok"},
+			status=200,
+		)
+		result = transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper", api_key="", prompt="",
+		)
+		assert result["segments"] is None
+
+	@responses.activate
 	def test_transcribe_no_api_key(self, tmp_path):
 		from llm_client import transcribe
 		audio_file = tmp_path / "audio.mp3"
