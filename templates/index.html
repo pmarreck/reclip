@@ -741,6 +741,19 @@
         document.getElementById('cards').appendChild(el);
       }
 
+      // Snapshot any live <audio> elements before innerHTML replaces them.
+      // Each audio carries data-op="<op-name>"; we restore currentTime/paused
+      // after the rebuild and suppress `autoplay` on restored ones so they
+      // don't jump back to 0. New audio elements (op not in snapshot) keep
+      // their initial autoplay behavior.
+      const audioState = {};
+      el.querySelectorAll('audio[data-op]').forEach(a => {
+        audioState[a.dataset.op] = {
+          currentTime: a.currentTime,
+          paused: a.paused,
+        };
+      });
+
       // Loading skeleton
       if (c.status === 'loading') {
         el.className = 'card';
@@ -853,7 +866,7 @@
             : `<button class="card-dl-btn done" style="${btnStyle}" onclick="listenText(${idx},'${op}')">&#128264; Listen</button>`;
           const audioPlayerHtml = opState.audioUrl
             ? `<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">
-                <audio controls autoplay style="flex:1;height:32px;min-width:0;" src="${opState.audioUrl}"></audio>
+                <audio data-op="${op}" controls ${audioState[op] ? '' : 'autoplay'} style="flex:1;height:32px;min-width:0;" src="${opState.audioUrl}"></audio>
                 <button class="card-dl-btn done" style="${btnStyle}white-space:nowrap;" onclick="downloadAudio(${idx},'${op}','mp3')">MP3</button>
                 <button class="card-dl-btn done" style="${btnStyle}white-space:nowrap;" onclick="downloadAudio(${idx},'${op}','wav')">WAV</button>
               </div>`
@@ -903,6 +916,14 @@
           ${renderCacheControls(idx, c)}
         </div>
       `;
+
+      // Restore playback state on audio elements that survived the rebuild.
+      el.querySelectorAll('audio[data-op]').forEach(a => {
+        const saved = audioState[a.dataset.op];
+        if (!saved) return;
+        try { a.currentTime = saved.currentTime; } catch (_) {}
+        if (!saved.paused) a.play().catch(() => {});
+      });
     }
 
     // ----- Cache controls (Pin / Delete / Reveal) shown for any card backed
