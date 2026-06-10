@@ -207,3 +207,83 @@ class TestConfigDirOverride:
 		cfg = Config()
 		assert cfg.config_dir == str(custom)
 		assert os.path.isfile(str(custom / "config.ini"))
+
+
+class TestSecretsFile:
+	"""secrets.ini lives next to config.ini and supplies values that interpolation
+	in config.ini can reference, plus serves as a fallback for keys not in
+	config.ini. Designed so a launchd/systemd-user service that doesn't inherit
+	the interactive shell env can still pick up API keys from a file.
+
+	Precedence (highest wins): config.ini literal > real os.environ > secrets.ini
+	> default. (config.ini wins over env to match today's behavior; secrets fills
+	in below env so an ad-hoc shell override still takes effect.)
+	"""
+
+	def test_missing_secrets_file_is_ok(self, isolated_config_dir, monkeypatch):
+		monkeypatch.delenv("RECLIP_STT_API_KEY", raising=False)
+		monkeypatch.delenv("RECLIP_API_KEY", raising=False)
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_api_key"] == ""
+
+	def test_secrets_feeds_interpolation_when_env_unset(self, isolated_config_dir, monkeypatch):
+		"""config.ini interpolates ${RECLIP_API_KEY}; env is empty; secrets.ini
+		supplies the value → it gets interpolated in."""
+		monkeypatch.delenv("RECLIP_API_KEY", raising=False)
+		monkeypatch.delenv("RECLIP_STT_API_KEY", raising=False)
+		isolated_config_dir.mkdir(parents=True, exist_ok=True)
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_API_KEY=sk-from-secrets\n")
+		(isolated_config_dir / "config.ini").write_text(
+			"RECLIP_STT_API_KEY=${RECLIP_STT_API_KEY:-${RECLIP_API_KEY}}\n"
+		)
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_api_key"] == "sk-from-secrets"
+
+	def test_real_env_beats_secrets_in_interpolation(self, isolated_config_dir, monkeypatch):
+		monkeypatch.setenv("RECLIP_API_KEY", "sk-from-env")
+		monkeypatch.delenv("RECLIP_STT_API_KEY", raising=False)
+		isolated_config_dir.mkdir(parents=True, exist_ok=True)
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_API_KEY=sk-from-secrets\n")
+		(isolated_config_dir / "config.ini").write_text(
+			"RECLIP_STT_API_KEY=${RECLIP_STT_API_KEY:-${RECLIP_API_KEY}}\n"
+		)
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_api_key"] == "sk-from-env"
+
+	def test_secrets_surfaces_when_config_ini_omits_key(self, isolated_config_dir, monkeypatch):
+		"""No literal in config.ini; secrets.ini has the key → cfg returns it."""
+		monkeypatch.delenv("RECLIP_STT_API_KEY", raising=False)
+		monkeypatch.delenv("RECLIP_API_KEY", raising=False)
+		isolated_config_dir.mkdir(parents=True, exist_ok=True)
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_STT_API_KEY=sk-direct\n")
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_api_key"] == "sk-direct"
+
+	def test_config_ini_literal_beats_secrets(self, isolated_config_dir, monkeypatch):
+		monkeypatch.delenv("RECLIP_STT_MODEL", raising=False)
+		isolated_config_dir.mkdir(parents=True, exist_ok=True)
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_STT_MODEL=secret-model\n")
+		(isolated_config_dir / "config.ini").write_text("RECLIP_STT_MODEL=config-model\n")
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_model"] == "config-model"
+
+	def test_secrets_hot_reloads(self, isolated_config_dir, monkeypatch):
+		monkeypatch.delenv("RECLIP_STT_API_KEY", raising=False)
+		monkeypatch.delenv("RECLIP_API_KEY", raising=False)
+		isolated_config_dir.mkdir(parents=True, exist_ok=True)
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_STT_API_KEY=sk-v1\n")
+		from config import Config
+		cfg = Config()
+		assert cfg["stt_api_key"] == "sk-v1"
+
+		(isolated_config_dir / "secrets.ini").write_text("RECLIP_STT_API_KEY=sk-v2\n")
+		cfg._last_check = 0
+		new_mtime = time.time() + 10
+		os.utime(str(isolated_config_dir / "secrets.ini"), (new_mtime, new_mtime))
+		cfg.maybe_reload()
+		assert cfg["stt_api_key"] == "sk-v2"

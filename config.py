@@ -144,14 +144,24 @@ RECLIP_TTS_VOICE_TEXT=${RECLIP_TTS_VOICE_TEXT}
 _INTERP_RE = re.compile(r'\$\{([A-Z_][A-Z0-9_]*)(?::-([^${}]*))?\}')
 
 
-def _interpolate(s):
-	"""Expand ${VAR} and ${VAR:-default} from environment. Supports nesting."""
+def _interpolate(s, extra=None):
+	"""Expand ${VAR} and ${VAR:-default}.
+
+	Lookup order: os.environ → extra (e.g. secrets.ini) → default. Real env wins
+	so ad-hoc shell overrides still work; the extra dict fills in below env,
+	which is the path that lets a launchd/systemd-user service (with no inherited
+	shell env) still resolve secrets-file values during interpolation.
+	"""
 	def sub(m):
 		var = m.group(1)
 		default = m.group(2)
 		val = os.environ.get(var)
 		if val:
 			return val
+		if extra:
+			fb = extra.get(var)
+			if fb:
+				return fb
 		return default if default is not None else ""
 
 	# Iterate for nested ${A:-${B}} by expanding innermost first
@@ -163,7 +173,7 @@ def _interpolate(s):
 	return s
 
 
-def _parse_value(raw):
+def _parse_value(raw, extra=None):
 	"""Parse the right-hand side of KEY=... handling quotes, interpolation, trailing comments."""
 	s = raw.lstrip()
 	if not s:
@@ -174,10 +184,10 @@ def _parse_value(raw):
 		quote = s[0]
 		try:
 			end = s.index(quote, 1)
-			return _interpolate(s[1:end])
+			return _interpolate(s[1:end], extra=extra)
 		except ValueError:
 			# Unclosed quote — treat as literal
-			return _interpolate(s[1:])
+			return _interpolate(s[1:], extra=extra)
 
 	# Unquoted: read until a " #" trailing comment, respecting ${...} braces
 	i = 0
@@ -196,11 +206,16 @@ def _parse_value(raw):
 		if depth == 0 and c == '#' and i > 0 and s[i - 1].isspace():
 			break
 		i += 1
-	return _interpolate(s[:i].rstrip())
+	return _interpolate(s[:i].rstrip(), extra=extra)
 
 
-def _parse_file(content):
-	"""Parse shell-style INI content into a dict of RECLIP_* values."""
+def _parse_file(content, extra=None):
+	"""Parse shell-style INI content into a dict of RECLIP_* values.
+
+	`extra` is an optional dict of fallback values used during interpolation
+	(below os.environ, above the literal default). Used to thread secrets.ini
+	values into config.ini's `${VAR}` expansion.
+	"""
 	values = {}
 	for raw_line in content.splitlines():
 		line = raw_line.strip()
@@ -212,7 +227,7 @@ def _parse_file(content):
 		key = key.strip()
 		if not key or not key.isidentifier():
 			continue
-		values[key] = _parse_value(rest)
+		values[key] = _parse_value(rest, extra=extra)
 	return values
 
 
@@ -253,10 +268,13 @@ class Config:
 	def __init__(self, config_dir=None):
 		self.config_dir = config_dir or _default_config_dir()
 		self.config_path = os.path.join(self.config_dir, "config.ini")
+		self.secrets_path = os.path.join(self.config_dir, "secrets.ini")
 		self._lock = threading.Lock()
 		self._last_check = 0.0
 		self._last_mtime = 0.0
+		self._last_secrets_mtime = 0.0
 		self._values = {}
+		self._secrets_perm_warned = False
 		self._ensure_file()
 		self._load()
 
@@ -267,8 +285,42 @@ class Config:
 			with open(self.config_path, "w", encoding="utf-8") as f:
 				f.write(DEFAULT_CONFIG_CONTENT)
 
+	def _read_secrets(self):
+		"""Return (raw_dict, mtime). Empty dict + 0.0 mtime when file missing.
+
+		Warns once on stderr if perms are broader than 0600 — file holds API keys.
+		"""
+		try:
+			st = os.stat(self.secrets_path)
+		except OSError:
+			return {}, 0.0
+		try:
+			with open(self.secrets_path, "r", encoding="utf-8") as f:
+				content = f.read()
+		except OSError:
+			return {}, 0.0
+		# Permission hygiene: warn once if group/other can read.
+		if not self._secrets_perm_warned and (st.st_mode & 0o077):
+			import sys as _sys
+			print(
+				f"[reclip] WARNING: {self.secrets_path} has permissions "
+				f"{oct(st.st_mode & 0o777)}; recommended 0600. Run: "
+				f"chmod 600 {self.secrets_path}",
+				file=_sys.stderr,
+			)
+			self._secrets_perm_warned = True
+		return _parse_file(content), st.st_mtime
+
 	def _load(self):
-		"""Parse the file and compute the effective config dict."""
+		"""Parse secrets.ini + config.ini and compute the effective config dict.
+
+		Lookup order for each key: config.ini literal → real os.environ →
+		secrets.ini → hardcoded default. secrets.ini values also flow into
+		config.ini's `${VAR}` interpolation below os.environ.
+		"""
+		secrets_raw, secrets_mtime = self._read_secrets()
+		self._last_secrets_mtime = secrets_mtime
+
 		try:
 			with open(self.config_path, "r", encoding="utf-8") as f:
 				content = f.read()
@@ -276,15 +328,20 @@ class Config:
 		except OSError:
 			content = DEFAULT_CONFIG_CONTENT
 
-		raw = _parse_file(content)
+		raw = _parse_file(content, extra=secrets_raw)
 
 		def get(key, default=""):
-			# File takes precedence; if absent from file, check env directly
-			# (supports the "commented-out in defaults" case for optional settings)
+			# config.ini wins, then env, then secrets, then default.
 			v = raw.get(key)
-			if v is None:
-				v = os.environ.get(key, "")
-			return v if v else default
+			if v:
+				return v
+			v = os.environ.get(key, "")
+			if v:
+				return v
+			v = secrets_raw.get(key, "")
+			if v:
+				return v
+			return default
 
 		cache_dir = get("RECLIP_CACHE_DIR") or _default_cache_dir()
 		try:
@@ -327,7 +384,7 @@ class Config:
 		}
 
 	def maybe_reload(self):
-		"""Check mtime and reload if changed. Throttled."""
+		"""Check mtime on config.ini and secrets.ini; reload if either changed. Throttled."""
 		now = time.time()
 		if now - self._last_check < self.RELOAD_THROTTLE_SECONDS:
 			return
@@ -335,11 +392,17 @@ class Config:
 			if now - self._last_check < self.RELOAD_THROTTLE_SECONDS:
 				return
 			self._last_check = now
+			cfg_mtime = 0.0
 			try:
-				mtime = os.path.getmtime(self.config_path)
+				cfg_mtime = os.path.getmtime(self.config_path)
 			except OSError:
-				return
-			if mtime > self._last_mtime:
+				pass
+			sec_mtime = 0.0
+			try:
+				sec_mtime = os.path.getmtime(self.secrets_path)
+			except OSError:
+				pass
+			if cfg_mtime > self._last_mtime or sec_mtime > self._last_secrets_mtime:
 				self._load()
 
 	def read_file(self):
