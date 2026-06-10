@@ -155,7 +155,7 @@ def chat_completion(url, model, api_key="", system_prompt="", user_content="", a
 
 def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
                    response_format="wav", api_key_hint="",
-                   ref_audio_path="", ref_text="", instruct=""):
+                   ref_audio_path="", ref_text="", instructions=""):
 	"""Generate speech audio from text via OpenAI-compatible TTS endpoint.
 
 	For voice cloning (Qwen3-TTS-Base, F5-TTS, etc.) pass both:
@@ -170,9 +170,10 @@ def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
 	instead — a string identifier.
 
 	For description-driven models (Qwen3-TTS-VoiceDesign), oMLX requires the
-	field to be named `instruct` rather than `voice`. To keep callers simple,
-	`voice=` is auto-routed to `instruct=` when the model name contains
-	"VoiceDesign". An explicit `instruct=` kwarg always wins.
+	wire field `instructions` (plural, matching OpenAI's gpt-4o-mini-tts
+	API) rather than `voice`. To keep callers simple, `voice=` is auto-routed
+	to `instructions=` when the model name contains "VoiceDesign". An explicit
+	`instructions=` kwarg always wins.
 
 	Returns raw audio bytes.
 	"""
@@ -190,13 +191,13 @@ def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
 	}
 	# Route description string to the correct field per model.
 	is_voicedesign = "VoiceDesign" in (model or "")
-	effective_instruct = instruct or (voice if is_voicedesign else "")
+	effective_instructions = instructions or (voice if is_voicedesign else "")
 	effective_voice = "" if is_voicedesign else voice
 
 	if effective_voice:
 		payload["voice"] = effective_voice
-	if effective_instruct:
-		payload["instruct"] = effective_instruct
+	if effective_instructions:
+		payload["instructions"] = effective_instructions
 	if ref_audio_path and ref_text:
 		with open(ref_audio_path, "rb") as f:
 			payload["ref_audio"] = base64.b64encode(f.read()).decode("ascii")

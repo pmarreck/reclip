@@ -1153,7 +1153,7 @@ def _resolve_speak_inputs(url, voice_override=""):
             except Exception:
                 # If STT fails, fall through to using as voice description
                 return ("", "", candidate)
-        # Plain string — voice name or description for instruct-capable models
+        # Plain string — voice name or description for description-driven models
         return ("", "", candidate)
 
     # No explicit voice config — auto-clone from the video's cached audio
@@ -1248,14 +1248,15 @@ def _run_speak(job_id, url, source, voice_override):
         # Voice resolution priority:
         #   1. voice_override (per-request body) — highest
         #   2. RECLIP_TTS_VOICE (config) — could be a preset voice name, a
-        #      voice-description prompt for instruct-capable models, or a
+        #      voice-description prompt for description-driven models, or a
         #      filesystem path to a reference audio clip
         #   3. Auto-clone from the video's own audio (middle 7s + STT)
         #
         # File paths route to ref_audio (with ref_text from STT of the clip).
         # Plain strings route to the OpenAI-compatible `voice` field, which
         # oMLX maps to mlx-audio's voice= kwarg if the model has one
-        # (Kokoro, CustomVoice) or instruct= otherwise (Qwen3-TTS Base).
+        # (Kokoro, CustomVoice), or to the `instructions` field for
+        # VoiceDesign models (Qwen3-TTS-VoiceDesign).
         ref_path, ref_text, voice_str = _resolve_speak_inputs(url, voice_override)
         cache_key_voice = voice_str or ref_path
         tts_filename = _tts_cache_filename(text, cache_key_voice)

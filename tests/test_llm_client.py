@@ -207,12 +207,12 @@ class TestChatCompletion:
 
 
 class TestTextToSpeech:
-	"""text_to_speech routes voice/instruct fields based on the model so that
-	oMLX's per-model expectations are met. VoiceDesign needs `instruct`,
-	others use `voice`."""
+	"""text_to_speech routes voice/instructions fields based on the model so
+	oMLX's per-model expectations are met. VoiceDesign needs `instructions`
+	(matches OpenAI's gpt-4o-mini-tts wire field name); others use `voice`."""
 
 	@responses.activate
-	def test_voicedesign_routes_to_instruct_field(self):
+	def test_voicedesign_routes_to_instructions_field(self):
 		from llm_client import text_to_speech
 
 		captured = {}
@@ -235,9 +235,11 @@ class TestTextToSpeech:
 			voice="warm feminine voice with a soft sultry tone",
 			api_key="",
 		)
-		assert captured.get("instruct") == "warm feminine voice with a soft sultry tone"
+		assert captured.get("instructions") == "warm feminine voice with a soft sultry tone"
 		# voice field should NOT be set (oMLX rejects with conflicting fields)
 		assert "voice" not in captured
+		# Old field name must not leak through
+		assert "instruct" not in captured
 
 	@responses.activate
 	def test_non_voicedesign_uses_voice_field(self):
@@ -264,11 +266,12 @@ class TestTextToSpeech:
 			api_key="",
 		)
 		assert captured.get("voice") == "af_bella"
+		assert "instructions" not in captured
 		assert "instruct" not in captured
 
 	@responses.activate
-	def test_explicit_instruct_kwarg_wins(self):
-		"""If caller passes instruct=, it goes through unchanged regardless of model."""
+	def test_explicit_instructions_kwarg_wins(self):
+		"""If caller passes instructions=, it goes through unchanged regardless of model."""
 		from llm_client import text_to_speech
 
 		captured = {}
@@ -288,7 +291,7 @@ class TestTextToSpeech:
 			url="http://localhost:8000/v1/audio/speech",
 			model="some-model",
 			text="hi",
-			instruct="explicit instruct value",
+			instructions="explicit instructions value",
 			api_key="",
 		)
-		assert captured.get("instruct") == "explicit instruct value"
+		assert captured.get("instructions") == "explicit instructions value"

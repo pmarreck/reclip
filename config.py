@@ -128,8 +128,8 @@ RECLIP_TTS_MODEL=${RECLIP_TTS_MODEL:-Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit}
 # RECLIP_TTS_VOICE may be:
 #   - empty: auto-clone from each video's own audio (middle 7s + STT)
 #   - a voice description string: routed via the OpenAI `voice` field. With
-#     Qwen3-TTS-Base this becomes the `instruct=` prompt; with Kokoro or
-#     Qwen3-TTS-CustomVoice it selects a preset voice by name.
+#     Qwen3-TTS-VoiceDesign this becomes the `instructions` prompt; with Kokoro
+#     or Qwen3-TTS-CustomVoice it selects a preset voice by name.
 #   - a filesystem path to a reference audio file: used as ref_audio for
 #     voice cloning across all videos. RECLIP_TTS_VOICE_TEXT (the transcript
 #     of that clip) is recommended; if absent, ReClip+ will run STT on the
