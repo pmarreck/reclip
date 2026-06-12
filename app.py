@@ -1122,6 +1122,60 @@ def transcribe_endpoint():
     return jsonify({"job_id": job_id})
 
 
+@app.route("/api/actions")
+def list_actions_endpoint():
+    """Registry listing for the dynamic UI: id/name/params per action, plus
+    last_error so a broken actions.json edit surfaces as a banner instead of
+    silently keeping the last good config."""
+    actions_registry.maybe_reload()
+    return jsonify({
+        "actions": [
+            {
+                "id": a.id,
+                "name": a.name,
+                "source": a.source,
+                "params": [
+                    {"name": p.name, "type": p.type, "required": p.required,
+                     "label": p.label or p.name}
+                    for p in a.params
+                ],
+            }
+            for a in actions_registry.list()
+        ],
+        "last_error": actions_registry.last_error,
+    })
+
+
+@app.route("/api/action/<action_id>", methods=["POST"])
+def run_action_endpoint(action_id):
+    """Generic action runner — the registry-driven replacement for the
+    per-kind summarize/translate/counterargue routes."""
+    actions_registry.maybe_reload()
+    action = actions_registry.get(action_id)
+    if action is None:
+        return jsonify({"error": f"Unknown action: {action_id}"}), 404
+
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "No URL provided"}), 400
+    params = data.get("params") or {}
+    for p in action.params:
+        if p.required and not str(params.get(p.name, "")).strip():
+            return jsonify({"error": f"Missing required parameter: {p.name}"}), 400
+
+    cached_text = cache.read_text(url, _action_output_filename(action, params))
+    if cached_text is not None:
+        return jsonify({"cached": True, "text": cached_text})
+
+    job_id = uuid.uuid4().hex[:10]
+    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
+    thread = threading.Thread(target=_run_action_job, args=(job_id, url, action, params))
+    thread.daemon = True
+    thread.start()
+    return jsonify({"job_id": job_id})
+
+
 @app.route("/api/diarize", methods=["POST"])
 def diarize_endpoint():
     data = request.json

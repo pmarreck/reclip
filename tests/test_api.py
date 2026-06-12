@@ -1258,3 +1258,84 @@ class TestActionEngine:
                         system_prompt="my custom edited prompt")
         app._run_action_sync(self.URL, edited, {})
         assert seen[0]["system_prompt"] == "my custom edited prompt"
+
+
+class TestActionsAPI:
+    """GET /api/actions — registry listing for dynamic UI buttons.
+    POST /api/action/<id> — generic job endpoint replacing per-kind routes."""
+
+    URL = "https://example.com/actions-api"
+
+    def test_list_actions(self, client, tmp_cache):
+        resp = client.get("/api/actions")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        ids = [a["id"] for a in data["actions"]]
+        assert "summarize" in ids and "translate" in ids and "counterargue" in ids
+        translate = next(a for a in data["actions"] if a["id"] == "translate")
+        assert translate["params"][0]["name"] == "language"
+        assert translate["params"][0]["required"] is True
+        assert "name" in translate and translate["name"] == "Translate"
+        # last_error surfaces config problems to the UI (None when healthy)
+        assert "last_error" in data
+
+    def test_run_action_job(self, client, tmp_cache, monkeypatch):
+        import app
+        app.cache.write_text(self.URL, "transcript.txt", "text",
+                             meta={"url": self.URL})
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: "SUMMED")
+
+        resp = client.post("/api/action/summarize", json={"url": self.URL})
+        job_id = resp.get_json()["job_id"]
+        for _ in range(100):
+            data = client.get(f"/api/status/{job_id}").get_json()
+            if data["status"] != "processing":
+                break
+            time.sleep(0.02)
+        assert data["status"] == "done"
+        assert data["text"] == "SUMMED"
+        assert app.cache.read_text(self.URL, "summary.txt") == "SUMMED"
+
+    def test_run_action_with_params(self, client, tmp_cache, monkeypatch):
+        import app
+        app.cache.write_text(self.URL, "transcript.txt", "text", meta={"url": self.URL})
+        app.cache.write_text(self.URL, "summary.txt", "the summary")
+        seen = []
+
+        def fake_chat(**kw):
+            seen.append(kw)
+            return "TRANSLATED"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        resp = client.post("/api/action/translate",
+                           json={"url": self.URL, "params": {"language": "German"}})
+        job_id = resp.get_json()["job_id"]
+        for _ in range(100):
+            data = client.get(f"/api/status/{job_id}").get_json()
+            if data["status"] != "processing":
+                break
+            time.sleep(0.02)
+        assert data["status"] == "done"
+        assert "German" in seen[0]["system_prompt"]
+        assert app.cache.read_text(self.URL, "summary-german.txt") == "TRANSLATED"
+
+    def test_cached_short_circuit(self, client, tmp_cache):
+        import app
+        app.cache.write_text(self.URL, "summary.txt", "CACHED")
+        resp = client.post("/api/action/summarize", json={"url": self.URL})
+        data = resp.get_json()
+        assert data.get("cached") is True
+        assert data["text"] == "CACHED"
+
+    def test_unknown_action_404(self, client, tmp_cache):
+        resp = client.post("/api/action/nonexistent", json={"url": self.URL})
+        assert resp.status_code == 404
+
+    def test_no_url_400(self, client, tmp_cache):
+        resp = client.post("/api/action/summarize", json={})
+        assert resp.status_code == 400
+
+    def test_missing_required_param_400(self, client, tmp_cache):
+        resp = client.post("/api/action/translate", json={"url": self.URL})
+        assert resp.status_code == 400
+        assert "language" in resp.get_json()["error"]
