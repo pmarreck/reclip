@@ -133,6 +133,23 @@ def _metadata_header(url):
     )
 
 
+STT_BIAS_PROMPT_MAX_CHARS = 600  # Whisper's prompt window is ~224 tokens
+
+
+def _stt_bias_prompt(meta, explicit_prompt, enabled):
+    """Whisper biasing prompt: an explicit RECLIP_STT_PROMPT always wins;
+    otherwise (when enabled) the video's own title/uploader/description seed
+    the decoder so proper nouns — guest names usually appear in descriptions —
+    transcribe correctly instead of phonetic guesses."""
+    if explicit_prompt:
+        return explicit_prompt
+    if not enabled:
+        return ""
+    parts = [str(meta.get(k) or "").strip() for k in ("title", "uploader", "description")]
+    combined = ". ".join(p for p in parts if p)
+    return combined[:STT_BIAS_PROMPT_MAX_CHARS]
+
+
 def _ensure_audio(url):
     """Ensure audio.mp3 exists in cache. Downloads via yt-dlp if needed."""
     if cache.has_file(url, "audio.mp3"):
@@ -191,8 +208,10 @@ def _run_summarize_sync(url):
             url=cfg["stt_url"],
             model=cfg["stt_model"],
             api_key=cfg["stt_api_key"],
-            prompt=cfg["stt_prompt"],
+            prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                    cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            word_timestamps=cfg["stt_word_timestamps"],
         )
         transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
     summary = chat_completion(
@@ -304,8 +323,10 @@ def _run_transcribe(job_id, url):
             url=cfg["stt_url"],
             model=cfg["stt_model"],
             api_key=cfg["stt_api_key"],
-            prompt=cfg["stt_prompt"],
+            prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                    cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
             api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            word_timestamps=cfg["stt_word_timestamps"],
         )
         transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
         job["status"] = "done"
@@ -332,8 +353,10 @@ def _run_summarize(job_id, url):
                 url=cfg["stt_url"],
                 model=cfg["stt_model"],
                 api_key=cfg["stt_api_key"],
-                prompt=cfg["stt_prompt"],
+                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+                word_timestamps=cfg["stt_word_timestamps"],
             )
             transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
             _log("summarize", "STT done in %.1fs (%d chars)", time.time() - t0, len(transcript))
@@ -371,8 +394,10 @@ def _run_counterargue(job_id, url):
                 url=cfg["stt_url"],
                 model=cfg["stt_model"],
                 api_key=cfg["stt_api_key"],
-                prompt=cfg["stt_prompt"],
+                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+                word_timestamps=cfg["stt_word_timestamps"],
             )
             transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
         _log("counterargue", "calling LLM (transcript=%d chars)", len(transcript))
@@ -415,8 +440,10 @@ def _run_diarize(job_id, url):
                 url=cfg["stt_url"],
                 model=cfg["stt_model"],
                 api_key=cfg["stt_api_key"],
-                prompt=cfg["stt_prompt"],
+                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+                word_timestamps=cfg["stt_word_timestamps"],
             )
             _save_transcript(url, result["text"], segments=result.get("segments"))
             seg_raw = json.dumps(result.get("segments") or [])
@@ -1333,8 +1360,10 @@ def _resolve_voice_reference(url):
                 url=cfg["stt_url"],
                 model=cfg["stt_model"],
                 api_key=cfg["stt_api_key"],
-                prompt=cfg["stt_prompt"],
+                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
                 api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+                word_timestamps=cfg["stt_word_timestamps"],
             )
             ref_text = (stt_result.get("text") or "").strip()
             cache.write_text(url, "voice_sample.txt", ref_text)

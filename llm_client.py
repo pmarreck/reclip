@@ -45,7 +45,7 @@ def _is_recoverable(error_msg):
 	return any(p.search(error_msg) for p in _OMLX_RECOVERABLE_PATTERNS)
 
 
-def _do_transcribe(audio_path, url, model, api_key, prompt):
+def _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps=False):
 	"""Single transcription request. Returns (status_code, json_or_text_dict)."""
 	headers = {}
 	if api_key:
@@ -56,11 +56,15 @@ def _do_transcribe(audio_path, url, model, api_key, prompt):
 		data = {"model": model}
 		if prompt:
 			data["prompt"] = prompt
+		if word_timestamps:
+			# oMLX extension (Whisper models): segments gain a words array of
+			# {word, start, end, probability} for word-level alignment.
+			data["word_timestamps"] = "true"
 		resp = requests.post(url, headers=headers, files=files, data=data, timeout=600)
 	return resp
 
 
-def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
+def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", word_timestamps=False):
 	"""Post an audio file for transcription via multipart form upload.
 
 	Sends file + model as multipart/form-data to any OpenAI-compatible
@@ -69,7 +73,7 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 	Auto-recovers from oMLX's "Processor not found" stale-load bug by
 	unloading the model and retrying once.
 	"""
-	resp = _do_transcribe(audio_path, url, model, api_key, prompt)
+	resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
 
 	if resp.status_code >= 400:
 		error_msg = "Transcription failed"
@@ -88,7 +92,7 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint=""):
 				error_msg, model,
 			)
 			_try_unload_omlx_model(url, model, api_key)
-			resp = _do_transcribe(audio_path, url, model, api_key, prompt)
+			resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
 			if resp.status_code < 400:
 				_logger.info("STT auto-recovery succeeded after model reload")
 				result = resp.json()

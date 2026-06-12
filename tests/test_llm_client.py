@@ -344,3 +344,50 @@ class TestTextToSpeech:
 			api_key="",
 		)
 		assert captured.get("instructions") == "explicit instructions value"
+
+
+class TestWordTimestamps:
+	"""word_timestamps is an oMLX extension form field (Whisper models only).
+	When requested, segments carry words: [{word,start,end,probability}]."""
+
+	@responses.activate
+	def test_word_timestamps_sent_as_form_field(self, tmp_path):
+		from llm_client import transcribe
+		audio_file = tmp_path / "a.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "ok"},
+			status=200,
+		)
+		transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper", api_key="", prompt="",
+			word_timestamps=True,
+		)
+		body = responses.calls[0].request.body
+		# multipart form body — the field name and value appear in the payload
+		assert b'name="word_timestamps"' in body
+		assert b"true" in body.lower()
+
+	@responses.activate
+	def test_word_timestamps_default_off_not_sent(self, tmp_path):
+		from llm_client import transcribe
+		audio_file = tmp_path / "a.mp3"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"text": "ok"},
+			status=200,
+		)
+		transcribe(
+			audio_path=str(audio_file),
+			url="http://localhost:8000/v1/audio/transcriptions",
+			model="whisper", api_key="", prompt="",
+		)
+		assert b'name="word_timestamps"' not in responses.calls[0].request.body

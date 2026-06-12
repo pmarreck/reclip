@@ -287,3 +287,27 @@ class TestSecretsFile:
 		os.utime(str(isolated_config_dir / "secrets.ini"), (new_mtime, new_mtime))
 		cfg.maybe_reload()
 		assert cfg["stt_api_key"] == "sk-v2"
+
+
+class TestSttExtensions:
+	def test_word_timestamps_default_true(self):
+		from config import load_config
+		cfg = load_config()
+		assert cfg["stt_word_timestamps"] is True
+
+	def test_word_timestamps_disable(self, monkeypatch):
+		monkeypatch.setenv("RECLIP_STT_WORD_TIMESTAMPS", "false")
+		from config import load_config
+		cfg = load_config()
+		assert cfg["stt_word_timestamps"] is False
+
+	def test_metadata_prompt_default_true(self):
+		from config import load_config
+		cfg = load_config()
+		assert cfg["stt_metadata_prompt"] is True
+
+	def test_metadata_prompt_disable(self, monkeypatch):
+		monkeypatch.setenv("RECLIP_STT_METADATA_PROMPT", "0")
+		from config import load_config
+		cfg = load_config()
+		assert cfg["stt_metadata_prompt"] is False

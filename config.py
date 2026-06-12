@@ -101,6 +101,13 @@ RECLIP_STT_URL=${RECLIP_STT_URL:-http://localhost:8000/v1/audio/transcriptions}
 RECLIP_STT_API_KEY=${RECLIP_STT_API_KEY:-${RECLIP_API_KEY}}
 RECLIP_STT_MODEL=${RECLIP_STT_MODEL:-whisper-large-v3-fp16}
 RECLIP_STT_PROMPT=${RECLIP_STT_PROMPT}
+# Word-level timestamps (oMLX extension, Whisper models only): enables
+# word-granularity speaker attribution in diarization. Default true.
+RECLIP_STT_WORD_TIMESTAMPS=${RECLIP_STT_WORD_TIMESTAMPS:-true}
+# When RECLIP_STT_PROMPT is unset, bias Whisper with the video's own
+# title/uploader/description so proper nouns transcribe correctly
+# (e.g. guest names from the description). Default true.
+RECLIP_STT_METADATA_PROMPT=${RECLIP_STT_METADATA_PROMPT:-true}
 
 # --- Summarization ---
 RECLIP_SUMMARIZE_URL=${RECLIP_SUMMARIZE_URL:-http://localhost:8000/v1/chat/completions}
@@ -250,6 +257,16 @@ def _default_browser_for_cookies():
 	return "firefox"
 
 
+_FALSY = {"0", "false", "no", "off", ""}
+
+
+def _parse_bool(raw, default):
+	"""Lenient boolean: 0/false/no/off (any case) → False; unset → default."""
+	if raw is None or raw == "":
+		return default
+	return raw.strip().lower() not in _FALSY
+
+
 def _default_config_dir():
 	override = os.environ.get("RECLIP_CONFIG_DIR")
 	if override:
@@ -364,6 +381,8 @@ class Config:
 			"stt_api_key": get("RECLIP_STT_API_KEY"),
 			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-fp16"),
 			"stt_prompt": get("RECLIP_STT_PROMPT"),
+			"stt_word_timestamps": _parse_bool(get("RECLIP_STT_WORD_TIMESTAMPS"), True),
+			"stt_metadata_prompt": _parse_bool(get("RECLIP_STT_METADATA_PROMPT"), True),
 			"summarize_url": get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions"),
 			"summarize_api_key": get("RECLIP_SUMMARIZE_API_KEY"),
 			"summarize_model": get("RECLIP_SUMMARIZE_MODEL", "gemma4-heretical-mlx-8bit"),

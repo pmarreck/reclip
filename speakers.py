@@ -25,26 +25,63 @@ def _overlap(a_start, a_end, b_start, b_end):
 	return max(0.0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def _speaker_for_span(start, end, speaker_turns):
+	"""Speaker with the greatest accumulated overlap for [start, end), or None."""
+	totals = {}
+	for turn in speaker_turns:
+		ov = _overlap(start, end, turn["start"], turn["end"])
+		if ov > 0:
+			totals[turn["speaker"]] = totals.get(turn["speaker"], 0.0) + ov
+	return max(totals, key=totals.get) if totals else None
+
+
+def _merge_segment_words(seg, speaker_turns):
+	"""Word-level merge for one segment carrying a words array: assign each
+	word a speaker by overlap (words in turn gaps inherit the previous word's
+	speaker), then group consecutive same-speaker runs into sub-segments.
+	This is what lets "How are you? I'm fine." split across two speakers
+	instead of gluing the reply to the asker."""
+	runs = []
+	prev_speaker = None
+	for w in seg["words"]:
+		sp = _speaker_for_span(w["start"], w["end"], speaker_turns)
+		if sp is None:
+			sp = prev_speaker
+		prev_speaker = sp
+		if runs and runs[-1]["speaker"] == sp:
+			runs[-1]["words"].append(w)
+		else:
+			runs.append({"speaker": sp, "words": [w]})
+	out = []
+	for run in runs:
+		text = "".join(w["word"] for w in run["words"]).strip()
+		out.append({
+			"start": run["words"][0]["start"],
+			"end": run["words"][-1]["end"],
+			"text": text,
+			"speaker": run["speaker"],
+		})
+	return out
+
+
 def merge_speakers(transcript_segments, speaker_turns):
-	"""Assign each transcript segment the speaker with the greatest total
-	temporal overlap (accumulated across that speaker's turns, so a speaker
-	briefly interrupted mid-segment still wins). Speaker is None when no
-	turn overlaps the segment at all (e.g. music, captions over silence).
+	"""Assign transcript text to speakers by temporal overlap with diarization
+	turns. Segments carrying word-level timestamps (oMLX word_timestamps
+	extension) are split at word-granularity speaker boundaries; wordless
+	segments get all-or-nothing assignment by greatest accumulated overlap.
+	Speaker is None when nothing overlaps (e.g. music, captions over silence).
 	"""
 	merged = []
 	for seg in transcript_segments:
-		totals = {}
-		for turn in speaker_turns:
-			ov = _overlap(seg["start"], seg["end"], turn["start"], turn["end"])
-			if ov > 0:
-				totals[turn["speaker"]] = totals.get(turn["speaker"], 0.0) + ov
-		speaker = max(totals, key=totals.get) if totals else None
-		merged.append({
-			"start": seg["start"],
-			"end": seg["end"],
-			"text": seg["text"],
-			"speaker": speaker,
-		})
+		if seg.get("words"):
+			merged.extend(_merge_segment_words(seg, speaker_turns))
+		else:
+			merged.append({
+				"start": seg["start"],
+				"end": seg["end"],
+				"text": seg["text"],
+				"speaker": _speaker_for_span(seg["start"], seg["end"], speaker_turns),
+			})
 	return merged
 
 

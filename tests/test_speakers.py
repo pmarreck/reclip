@@ -170,3 +170,82 @@ class TestNaming:
 		}
 		display = apply_names({"Speaker 1": "SPEAKER_00", "Speaker 2": "SPEAKER_01"}, naming)
 		assert display == {}
+
+
+class TestWordLevelMerge:
+	"""When transcript segments carry word-level timestamps (oMLX
+	word_timestamps extension), merge_speakers must split a segment at
+	word-granularity speaker boundaries instead of all-or-nothing."""
+
+	def test_segment_split_at_word_boundary(self):
+		from speakers import merge_speakers
+		# One STT segment containing speech from two speakers
+		transcript = [{
+			"start": 0.0, "end": 8.0, "text": "How are you? I'm fine.",
+			"words": [
+				{"word": " How", "start": 0.0, "end": 0.5},
+				{"word": " are", "start": 0.5, "end": 1.0},
+				{"word": " you?", "start": 1.0, "end": 1.6},
+				{"word": " I'm", "start": 4.2, "end": 4.6},
+				{"word": " fine.", "start": 4.6, "end": 5.2},
+			],
+		}]
+		turns = [
+			{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"},
+			{"start": 4.0, "end": 8.0, "speaker": "SPEAKER_01"},
+		]
+		merged = merge_speakers(transcript, turns)
+		assert len(merged) == 2
+		assert merged[0]["speaker"] == "SPEAKER_00"
+		assert merged[0]["text"] == "How are you?"
+		assert merged[1]["speaker"] == "SPEAKER_01"
+		assert merged[1]["text"] == "I'm fine."
+		# sub-segment timing comes from the words
+		assert merged[0]["start"] == 0.0 and merged[0]["end"] == 1.6
+		assert merged[1]["start"] == 4.2 and merged[1]["end"] == 5.2
+
+	def test_unmatched_words_inherit_previous_speaker(self):
+		from speakers import merge_speakers
+		transcript = [{
+			"start": 0.0, "end": 5.0, "text": "Hello um world",
+			"words": [
+				{"word": " Hello", "start": 0.0, "end": 0.5},
+				{"word": " um", "start": 2.5, "end": 2.7},   # in a turn gap
+				{"word": " world", "start": 0.6, "end": 1.0},
+			],
+		}]
+		turns = [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}]
+		merged = merge_speakers(transcript, turns)
+		assert len(merged) == 1
+		assert merged[0]["speaker"] == "SPEAKER_00"
+		assert merged[0]["text"] == "Hello um world"
+
+	def test_segments_without_words_fall_back_to_segment_level(self):
+		from speakers import merge_speakers
+		transcript = [
+			{"start": 0.0, "end": 2.0, "text": "worded",
+			 "words": [{"word": " worded", "start": 0.0, "end": 2.0}]},
+			{"start": 3.0, "end": 5.0, "text": "wordless"},
+		]
+		turns = [
+			{"start": 0.0, "end": 2.5, "speaker": "SPEAKER_00"},
+			{"start": 2.5, "end": 5.0, "speaker": "SPEAKER_01"},
+		]
+		merged = merge_speakers(transcript, turns)
+		assert [m["speaker"] for m in merged] == ["SPEAKER_00", "SPEAKER_01"]
+		assert [m["text"] for m in merged] == ["worded", "wordless"]
+
+	def test_all_words_unmatched_yields_none_speaker(self):
+		from speakers import merge_speakers
+		transcript = [{
+			"start": 0.0, "end": 2.0, "text": "ghost words",
+			"words": [
+				{"word": " ghost", "start": 0.0, "end": 0.5},
+				{"word": " words", "start": 0.5, "end": 1.0},
+			],
+		}]
+		turns = [{"start": 10.0, "end": 12.0, "speaker": "SPEAKER_00"}]
+		merged = merge_speakers(transcript, turns)
+		assert len(merged) == 1
+		assert merged[0]["speaker"] is None
+		assert merged[0]["text"] == "ghost words"

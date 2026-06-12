@@ -1116,3 +1116,36 @@ class TestDiarizeEndpoint:
         data = self._poll(client, resp.get_json()["job_id"])
         assert data["status"] == "error"
         assert "RECLIP_SPEAKRS_LIB" in data["error"]
+
+
+class TestSttBiasPrompt:
+    """_stt_bias_prompt: when no explicit RECLIP_STT_PROMPT, bias Whisper with
+    the video's own metadata so proper nouns (guest names!) transcribe right."""
+
+    def test_explicit_prompt_wins(self):
+        import app
+        out = app._stt_bias_prompt({"title": "T"}, explicit_prompt="my prompt", enabled=True)
+        assert out == "my prompt"
+
+    def test_disabled_returns_empty(self):
+        import app
+        out = app._stt_bias_prompt({"title": "T"}, explicit_prompt="", enabled=False)
+        assert out == ""
+
+    def test_builds_from_metadata(self):
+        import app
+        meta = {"title": "Interview with Astead Herndon", "uploader": "The Daily",
+                "description": "Astead talks to Bailey Winder about data centers."}
+        out = app._stt_bias_prompt(meta, explicit_prompt="", enabled=True)
+        assert "Astead Herndon" in out
+        assert "Bailey Winder" in out
+
+    def test_caps_length(self):
+        import app
+        meta = {"title": "T", "description": "x" * 5000}
+        out = app._stt_bias_prompt(meta, explicit_prompt="", enabled=True)
+        assert len(out) <= 600
+
+    def test_empty_metadata_returns_empty(self):
+        import app
+        assert app._stt_bias_prompt({}, explicit_prompt="", enabled=True) == ""
