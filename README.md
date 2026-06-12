@@ -20,9 +20,8 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 
 ### Added in this fork
 - **Transcription** — speech-to-text via Whisper (oMLX, Ollama, or OpenAI-compatible endpoint)
-- **Summarization** — LLM-powered summaries of transcripts
-- **Translation** — translate transcripts or summaries to any language
-- **Counter-argument** — LLM challenges claims in the transcript (declines gracefully on tutorials/news/music)
+- **Speaker diarization + naming** — local *who-spoke-when* via [speakrs](https://github.com/avencera/speakrs) (consumed through the [speakrs_ffi](https://github.com/pmarreck/speakrs_ffi) C FFI; ~220× realtime on Apple Silicon), word-level speaker attribution from Whisper word timestamps, and an LLM pass that names speakers from context cues (self-intros, address terms, video metadata) — confidence-gated so it never invents names
+- **Configurable actions** — Summarize / Translate / Counterargue ship as defaults in `~/.config/reclip+/actions.json`; add your own named button by adding `{id, name, source, system_prompt, params}` to the file (hot-reloaded). Actions chain: `source` is `transcript`, `diarized`, or another action's id, and missing upstream steps run automatically
 - **Text-to-speech** — local TTS playback of summaries/translations via Qwen3-TTS / Voxtral / Kokoro
 - **Image-host extraction** — Instagram / Threads / Reddit / X / Pinterest / Tumblr / Imgur / Flickr / DeviantArt carousels render as a 2-up grid via [gallery-dl](https://github.com/mikf/gallery-dl); long-press / right-click saves images directly. Tap to open raw image in a new tab.
 - **Recent cache view** — Cached entries hydrate as cards on page load (newest first), unified with fresh fetches. Pin to keep from LRU eviction, delete individually, or "Show in Finder" / "Open Folder" (loopback only).
@@ -35,8 +34,10 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 - **CLI interface** — `python cli.py transcribe|summarize|translate|info|cache|config`
 - **Multi-video page support** — pages with multiple embedded videos (e.g. NYT articles) are handled correctly
 - **Nix flake** — reproducible dev environment, no venv needed
-- **Independently configurable backends** — separate URL, model, API key, and prompt for STT, summarization, translation, counterargument, and TTS
-- **193 tests** — config, cache, LLM client, media extractor, service, and API integration tests
+- **Independently configurable backends** — separate URL, model, and API key for STT, summarization, translation, counterargument, and TTS; prompts live in `actions.json`
+- **Service-safe secrets** — `~/.config/reclip+/secrets.ini` (0600, hot-reloaded) supplies API keys to the launchd/systemd service, which never sees your shell env
+- **Whisper accuracy helpers** — the video's own title/description seeds Whisper's decoder so proper nouns transcribe correctly (`RECLIP_STT_METADATA_PROMPT`), and word timestamps are requested for diarization alignment (`RECLIP_STT_WORD_TIMESTAMPS`)
+- **300+ tests** — config, cache, LLM client, diarizer, speaker pipeline, actions registry, media extractor, service, and API integration tests
 
 ## Quick Start
 
