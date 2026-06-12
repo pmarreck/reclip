@@ -247,7 +247,10 @@ class TestTranscribeEndpoint:
         assert "=== Video Metadata ===" in cached
 
 
-class TestSummarizeEndpoint:
+class TestSummarizeAction:
+    """Converted from the legacy /api/summarize tests — same behavior through
+    the generic /api/action/summarize endpoint."""
+
     @responses.activate
     def test_summarize_cached_returns_immediately(self, client, tmp_cache):
         import app
@@ -256,7 +259,7 @@ class TestSummarizeEndpoint:
             "summary.txt",
             "Cached summary",
         )
-        resp = client.post("/api/summarize", json={
+        resp = client.post("/api/action/summarize", json={
             "url": "https://youtube.com/watch?v=sumcached",
         })
         data = resp.get_json()
@@ -265,85 +268,66 @@ class TestSummarizeEndpoint:
         assert data.get("text") == "Cached summary"
 
     def test_summarize_missing_url_returns_400(self, client):
-        resp = client.post("/api/summarize", json={})
+        resp = client.post("/api/action/summarize", json={})
         assert resp.status_code == 400
 
     @responses.activate
     def test_summarize_uncached_returns_job_id(self, client, tmp_cache, monkeypatch):
         import app
-
-        # Pre-cache transcript so summarize doesn't need to transcribe
         app.cache.write_text(
             "https://youtube.com/watch?v=sumuncached",
             "transcript.txt",
             "This is a long transcript that needs summarizing.",
         )
-
-        # Mock the chat completion call for summarize
         responses.add(
             responses.POST,
             "http://localhost:8000/v1/chat/completions",
             json={"choices": [{"message": {"content": "Summary of the transcript."}}]},
             status=200,
         )
-
-        resp = client.post("/api/summarize", json={
+        resp = client.post("/api/action/summarize", json={
             "url": "https://youtube.com/watch?v=sumuncached",
         })
         data = resp.get_json()
         assert resp.status_code == 200
         assert "job_id" in data
-
-        # Wait for the background thread
         job_id = data["job_id"]
         for _ in range(50):
-            status_resp = client.get(f"/api/status/{job_id}")
-            status_data = status_resp.get_json()
+            status_data = client.get(f"/api/status/{job_id}").get_json()
             if status_data["status"] != "processing":
                 break
             time.sleep(0.05)
-
         assert status_data["status"] == "done"
         assert status_data["type"] == "text"
         assert "Summary of the transcript." in status_data["text"]
 
 
-class TestTranslateEndpoint:
+class TestTranslateActions:
+    """Converted from the legacy /api/translate tests — transcript-rooted
+    translation is now its own registry action (translate_transcript)."""
+
     @responses.activate
-    def test_translate_cached_returns_immediately(self, client, tmp_cache):
+    def test_translate_transcript_cached(self, client, tmp_cache):
         import app
         url = "https://youtube.com/watch?v=trcached"
         app.cache.write_text(url, "translation-spanish.txt", "Cached translation")
-
-        resp = client.post("/api/translate", json={
-            "url": url,
-            "language": "Spanish",
-            "source": "transcript",
+        resp = client.post("/api/action/translate_transcript", json={
+            "url": url, "params": {"language": "Spanish"},
         })
         data = resp.get_json()
         assert resp.status_code == 200
         assert data.get("cached") is True
         assert data.get("text") == "Cached translation"
 
-    def test_translate_invalid_source_returns_400(self, client):
-        resp = client.post("/api/translate", json={
-            "url": "https://example.com",
-            "language": "Spanish",
-            "source": "invalid",
-        })
-        assert resp.status_code == 400
-
     def test_translate_missing_url_returns_400(self, client):
-        resp = client.post("/api/translate", json={
-            "language": "Spanish",
-            "source": "transcript",
+        resp = client.post("/api/action/translate_transcript", json={
+            "params": {"language": "Spanish"},
         })
         assert resp.status_code == 400
 
     def test_translate_missing_language_returns_400(self, client):
-        resp = client.post("/api/translate", json={
+        resp = client.post("/api/action/translate_transcript", json={
             "url": "https://example.com",
-            "source": "transcript",
         })
         assert resp.status_code == 400
 
@@ -352,11 +336,8 @@ class TestTranslateEndpoint:
         import app
         url = "https://youtube.com/watch?v=sumtrcached"
         app.cache.write_text(url, "summary-french.txt", "Cached summary translation")
-
-        resp = client.post("/api/translate", json={
-            "url": url,
-            "language": "French",
-            "source": "summary",
+        resp = client.post("/api/action/translate", json={
+            "url": url, "params": {"language": "French"},
         })
         data = resp.get_json()
         assert resp.status_code == 200
@@ -364,43 +345,30 @@ class TestTranslateEndpoint:
         assert data.get("text") == "Cached summary translation"
 
     @responses.activate
-    def test_translate_uncached_returns_job_id(self, client, tmp_cache, monkeypatch):
+    def test_translate_transcript_uncached_runs_job(self, client, tmp_cache, monkeypatch):
         import app
-
-        # Pre-cache transcript so translate can read it
         url = "https://youtube.com/watch?v=truncached"
         app.cache.write_text(url, "transcript.txt", "English text to translate.")
-
-        # Mock the chat completion call for translate
         responses.add(
             responses.POST,
             "http://localhost:8000/v1/chat/completions",
             json={"choices": [{"message": {"content": "Texto traducido."}}]},
             status=200,
         )
-
-        resp = client.post("/api/translate", json={
-            "url": url,
-            "language": "Spanish",
-            "source": "transcript",
+        resp = client.post("/api/action/translate_transcript", json={
+            "url": url, "params": {"language": "Spanish"},
         })
         data = resp.get_json()
         assert resp.status_code == 200
         assert "job_id" in data
-
-        # Wait for the background thread
         job_id = data["job_id"]
         for _ in range(50):
-            status_resp = client.get(f"/api/status/{job_id}")
-            status_data = status_resp.get_json()
+            status_data = client.get(f"/api/status/{job_id}").get_json()
             if status_data["status"] != "processing":
                 break
             time.sleep(0.05)
-
         assert status_data["status"] == "done"
-        assert status_data["type"] == "text"
-        assert "Texto traducido." in status_data["text"]
-
+        assert app.cache.read_text(url, "translation-spanish.txt") == "Texto traducido."
 
 class TestPlaylistEndpoint:
     def test_playlist_returns_entries(self, client, monkeypatch):
@@ -1377,3 +1345,72 @@ class TestIndexRoute:
         resp = client.get("/")
         assert resp.status_code == 200
         assert b"<title>" in resp.data
+
+
+class TestDiarizedActionSource:
+    """Actions with source 'diarized' read the speaker-labeled transcript,
+    running the diarize pipeline first if it isn't cached."""
+
+    URL = "https://example.com/diarized-source"
+
+    def test_cached_diarized_feeds_action(self, tmp_cache, monkeypatch):
+        import app
+        from actions import Action
+        app.cache.write_text(self.URL, "transcript_diarized.txt",
+                             "Alice: hi\nBob: yo", meta={"url": self.URL})
+        seen = []
+
+        def fake_chat(**kw):
+            seen.append(kw)
+            return "ANALYSIS"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        act = Action(id="who", name="Who", source="diarized", system_prompt="p")
+        out = app._run_action_sync(self.URL, act, {})
+        assert out == "ANALYSIS"
+        assert seen[0]["user_content"] == "Alice: hi\nBob: yo"
+
+    def test_missing_diarized_runs_pipeline(self, tmp_cache, monkeypatch):
+        import app
+        from actions import Action
+        seen = []
+        monkeypatch.setattr(app, "_diarize_sync",
+                            lambda url: (seen.append(url), "Alice: generated")[1])
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: "OUT")
+
+        act = Action(id="who", name="Who", source="diarized", system_prompt="p")
+        out = app._run_action_sync(self.URL, act, {})
+        assert out == "OUT"
+        assert seen == [self.URL]
+
+
+class TestDiarizeRetranscribes:
+    """A pre-segments cache entry (transcript.txt without
+    transcript_segments.json) must be RE-transcribed by the diarize pipeline —
+    the cached text alone can't be aligned to speaker turns."""
+
+    URL = "https://example.com/old-entry"
+
+    def test_old_entry_gets_retranscribed(self, tmp_cache, monkeypatch):
+        import app
+        app.cache.write_text(self.URL, "transcript.txt", "old cached text",
+                             meta={"url": self.URL})
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata",
+                            lambda u: {"title": "T", "url": u})
+        monkeypatch.setattr(app, "_ensure_audio",
+                            lambda u: app.cache.entry_path(u, "audio.mp3"))
+        stt_calls = []
+
+        def fake_stt(**kw):
+            stt_calls.append(kw)
+            return {"text": "fresh text",
+                    "segments": [{"start": 0.0, "end": 2.0, "text": "fresh text"}]}
+        monkeypatch.setattr(app, "llm_transcribe", fake_stt)
+        monkeypatch.setattr(app, "diarize_file", lambda p, **kw: {
+            "segments": [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}],
+            "speakers": ["SPEAKER_00"]})
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: "{}")
+
+        out = app._diarize_sync(self.URL)
+        assert len(stt_calls) == 1, "must re-run STT to obtain segments"
+        assert "fresh text" in out

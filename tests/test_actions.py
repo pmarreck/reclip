@@ -46,19 +46,19 @@ class TestDefaults:
 	def test_summarize_default_matches_config_default(self, isolated_config_dir):
 		"""The migrated summarize prompt is byte-identical to config.DEFAULT_SUMMARIZE_PROMPT."""
 		from actions import Actions
-		from config import DEFAULT_SUMMARIZE_PROMPT
+		from actions import DEFAULT_SUMMARIZE_PROMPT
 		a = Actions()
 		assert a.get("summarize").system_prompt == DEFAULT_SUMMARIZE_PROMPT
 
 	def test_translate_default_matches_config_default(self, isolated_config_dir):
 		from actions import Actions
-		from config import DEFAULT_TRANSLATE_PROMPT
+		from actions import DEFAULT_TRANSLATE_PROMPT
 		a = Actions()
 		assert a.get("translate").system_prompt == DEFAULT_TRANSLATE_PROMPT
 
 	def test_counterargue_default_matches_config_default(self, isolated_config_dir):
 		from actions import Actions
-		from config import DEFAULT_COUNTERARGUE_PROMPT
+		from actions import DEFAULT_COUNTERARGUE_PROMPT
 		a = Actions()
 		assert a.get("counterargue").system_prompt == DEFAULT_COUNTERARGUE_PROMPT
 
@@ -259,3 +259,20 @@ class TestCounterargueSource:
 		a = Actions()
 		assert a.get("counterargue").source == "transcript"
 		assert a.resolve_chain("counterargue") == ["counterargue"]
+
+
+class TestDiarizedSource:
+	def test_diarized_is_valid_terminal_source(self, isolated_config_dir):
+		"""'diarized' (the speaker-labeled transcript) is a root source like
+		'transcript' — actions can chain from it."""
+		_write_actions(isolated_config_dir, {
+			"version": 1,
+			"actions": [
+				{"id": "who_said_what", "name": "Who said what",
+				 "source": "diarized", "system_prompt": "analyze per speaker"},
+			],
+		})
+		from actions import Actions
+		a = Actions()
+		assert a.get("who_said_what").source == "diarized"
+		assert a.resolve_chain("who_said_what") == ["who_said_what"]

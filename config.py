@@ -11,40 +11,6 @@ import threading
 import time
 
 
-DEFAULT_SUMMARIZE_PROMPT = (
-	"Please summarize the most pertinent elements of the following transcript "
-	"or narrative. If it (or any part of it) presents a list of things "
-	"(questions, points, tasks, steps, sequential events, etc.), please list "
-	"those out without collapsing them further. If there is an issue with the "
-	"content (such as it appearing to be missing), mention that prefixed with "
-	"'Problem: '. Don't comment on the summary itself. If there is a metadata "
-	"section, output it verbatim at the top of the summary."
-)
-
-DEFAULT_TRANSLATE_PROMPT = (
-	"You are an expert translator. Please translate the following into "
-	"{language}. For idioms, words, or expressions that do not translate "
-	"perfectly: (1) Make your best translation attempt (2) Add footnotes with "
-	"explanations in both the source and target languages. Do not output "
-	"anything but the translation and footnotes. If there is an unresolvable "
-	"issue, mention it prefixed with 'Problem: ' in both languages. Preserve "
-	"all formatting."
-)
-
-DEFAULT_COUNTERARGUE_PROMPT = (
-	"You are a critical thinker and skilled debater. Analyze the following "
-	"transcript and identify claims, arguments, or assertions that can be "
-	"challenged. For each counterarguable point: (1) State the original claim "
-	"(2) Present the strongest counterargument with evidence or reasoning "
-	"(3) Note the strength of the counterargument (strong, moderate, weak). "
-	"Be fair and intellectually honest — distinguish between factual errors, "
-	"logical fallacies, unsupported claims, and matters of legitimate debate. "
-	"If the content is purely factual reporting, a tutorial, music, or "
-	"otherwise not appropriate to counterargue, state that clearly and explain "
-	"why. Do not manufacture controversy where none exists."
-)
-
-
 DEFAULT_CONFIG_CONTENT = """# ReClip+ configuration
 # Syntax: KEY=value. Quotes (' or ") optional. Lines starting with # are comments,
 # and trailing " # comment" is also stripped (unless inside quotes).
@@ -113,20 +79,17 @@ RECLIP_STT_METADATA_PROMPT=${RECLIP_STT_METADATA_PROMPT:-true}
 RECLIP_SUMMARIZE_URL=${RECLIP_SUMMARIZE_URL:-http://localhost:8000/v1/chat/completions}
 RECLIP_SUMMARIZE_API_KEY=${RECLIP_SUMMARIZE_API_KEY:-${RECLIP_API_KEY}}
 RECLIP_SUMMARIZE_MODEL=${RECLIP_SUMMARIZE_MODEL:-gemma4-heretical-mlx-8bit}
-# Leave unset to use the built-in default prompt, or override here:
-# RECLIP_SUMMARIZE_PROMPT="your custom prompt"
+# Prompts are configured in actions.json (same directory), not here.
 
 # --- Translation ---
 RECLIP_TRANSLATE_URL=${RECLIP_TRANSLATE_URL:-http://localhost:8000/v1/chat/completions}
 RECLIP_TRANSLATE_API_KEY=${RECLIP_TRANSLATE_API_KEY:-${RECLIP_API_KEY}}
 RECLIP_TRANSLATE_MODEL=${RECLIP_TRANSLATE_MODEL:-gemma4-heretical-mlx-8bit}
-# RECLIP_TRANSLATE_PROMPT="must contain {language} placeholder"
 
 # --- Counterargue ---
 RECLIP_COUNTERARGUE_URL=${RECLIP_COUNTERARGUE_URL:-http://localhost:8000/v1/chat/completions}
 RECLIP_COUNTERARGUE_API_KEY=${RECLIP_COUNTERARGUE_API_KEY:-${RECLIP_API_KEY}}
 RECLIP_COUNTERARGUE_MODEL=${RECLIP_COUNTERARGUE_MODEL:-gemma4-heretical-mlx-8bit}
-# RECLIP_COUNTERARGUE_PROMPT="your custom counterargue prompt"
 
 # --- Text-to-speech ---
 RECLIP_TTS_URL=${RECLIP_TTS_URL:-http://localhost:8000/v1/audio/speech}
@@ -386,15 +349,12 @@ class Config:
 			"summarize_url": get("RECLIP_SUMMARIZE_URL", "http://localhost:8000/v1/chat/completions"),
 			"summarize_api_key": get("RECLIP_SUMMARIZE_API_KEY"),
 			"summarize_model": get("RECLIP_SUMMARIZE_MODEL", "gemma4-heretical-mlx-8bit"),
-			"summarize_prompt": get("RECLIP_SUMMARIZE_PROMPT", DEFAULT_SUMMARIZE_PROMPT),
 			"translate_url": get("RECLIP_TRANSLATE_URL", "http://localhost:8000/v1/chat/completions"),
 			"translate_api_key": get("RECLIP_TRANSLATE_API_KEY"),
 			"translate_model": get("RECLIP_TRANSLATE_MODEL", "gemma4-heretical-mlx-8bit"),
-			"translate_prompt": get("RECLIP_TRANSLATE_PROMPT", DEFAULT_TRANSLATE_PROMPT),
 			"counterargue_url": get("RECLIP_COUNTERARGUE_URL", "http://localhost:8000/v1/chat/completions"),
 			"counterargue_api_key": get("RECLIP_COUNTERARGUE_API_KEY"),
 			"counterargue_model": get("RECLIP_COUNTERARGUE_MODEL", "gemma4-heretical-mlx-8bit"),
-			"counterargue_prompt": get("RECLIP_COUNTERARGUE_PROMPT", DEFAULT_COUNTERARGUE_PROMPT),
 			"tts_url": get("RECLIP_TTS_URL", "http://localhost:8000/v1/audio/speech"),
 			"tts_api_key": get("RECLIP_TTS_API_KEY"),
 			"tts_model": get("RECLIP_TTS_MODEL", "Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"),

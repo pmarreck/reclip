@@ -20,6 +20,8 @@ from dataclasses import dataclass, field, asdict
 
 
 SOURCE_TRANSCRIPT = "transcript"
+SOURCE_DIARIZED = "diarized"
+TERMINAL_SOURCES = (SOURCE_TRANSCRIPT, SOURCE_DIARIZED)
 
 
 class ActionError(Exception):
@@ -44,14 +46,43 @@ class Action:
 	params: list = field(default_factory=list)
 
 
+DEFAULT_SUMMARIZE_PROMPT = (
+	"Please summarize the most pertinent elements of the following transcript "
+	"or narrative. If it (or any part of it) presents a list of things "
+	"(questions, points, tasks, steps, sequential events, etc.), please list "
+	"those out without collapsing them further. If there is an issue with the "
+	"content (such as it appearing to be missing), mention that prefixed with "
+	"'Problem: '. Don't comment on the summary itself. If there is a metadata "
+	"section, output it verbatim at the top of the summary."
+)
+
+DEFAULT_TRANSLATE_PROMPT = (
+	"You are an expert translator. Please translate the following into "
+	"{language}. For idioms, words, or expressions that do not translate "
+	"perfectly: (1) Make your best translation attempt (2) Add footnotes with "
+	"explanations in both the source and target languages. Do not output "
+	"anything but the translation and footnotes. If there is an unresolvable "
+	"issue, mention it prefixed with 'Problem: ' in both languages. Preserve "
+	"all formatting."
+)
+
+DEFAULT_COUNTERARGUE_PROMPT = (
+	"You are a critical thinker and skilled debater. Analyze the following "
+	"transcript and identify claims, arguments, or assertions that can be "
+	"challenged. For each counterarguable point: (1) State the original claim "
+	"(2) Present the strongest counterargument with evidence or reasoning "
+	"(3) Note the strength of the counterargument (strong, moderate, weak). "
+	"Be fair and intellectually honest — distinguish between factual errors, "
+	"logical fallacies, unsupported claims, and matters of legitimate debate. "
+	"If the content is purely factual reporting, a tutorial, music, or "
+	"otherwise not appropriate to counterargue, state that clearly and explain "
+	"why. Do not manufacture controversy where none exists."
+)
+
+
 def _builtin_actions():
-	"""The three seed actions. Prompts are pulled from config.py to keep one
-	source of truth until the legacy env-var prompts are deleted in phase 3."""
-	from config import (
-		DEFAULT_SUMMARIZE_PROMPT,
-		DEFAULT_TRANSLATE_PROMPT,
-		DEFAULT_COUNTERARGUE_PROMPT,
-	)
+	"""The seed actions; prompts now live HERE (the legacy RECLIP_*_PROMPT
+	config knobs were removed — edit ~/.config/reclip+/actions.json instead)."""
 	return [
 		Action(
 			id="summarize", name="Summarize", source=SOURCE_TRANSCRIPT,
@@ -133,14 +164,14 @@ def _validate(actions):
 		seen_ids.add(x)
 	known = set(ids)
 	for a in actions:
-		if a.source != SOURCE_TRANSCRIPT and a.source not in known:
+		if a.source not in TERMINAL_SOURCES and a.source not in known:
 			raise ActionError(f"action {a.id!r} has unknown source: {a.source!r}")
 	# Cycle detection: walk source chain from each action; loop = revisit.
 	by_id = {a.id: a for a in actions}
 	for a in actions:
 		visited = set()
 		cur = a.id
-		while cur != SOURCE_TRANSCRIPT:
+		while cur not in TERMINAL_SOURCES:
 			if cur in visited:
 				raise ActionError(f"cyclic source chain involving action {a.id!r}")
 			visited.add(cur)
@@ -251,7 +282,7 @@ class Actions:
 		chain = []
 		cur = action_id
 		visited = set()
-		while cur != SOURCE_TRANSCRIPT:
+		while cur not in TERMINAL_SOURCES:
 			if cur in visited:
 				raise ActionError(f"cyclic source chain at {cur!r}")
 			visited.add(cur)

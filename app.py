@@ -258,19 +258,6 @@ def _action_output_filename(action, params):
     return f"action-{action.id}{'-' + slug if slug else ''}.txt"
 
 
-def _system_prompt_for(action):
-    """Prompt precedence: a user-edited actions.json prompt wins; an unedited
-    builtin honors the legacy RECLIP_<ID>_PROMPT config override; otherwise
-    the built-in default (identical text either way)."""
-    legacy_key = f"{action.id}_prompt"
-    if legacy_key in cfg.as_dict():
-        from actions import _builtin_actions
-        builtin = next((b for b in _builtin_actions() if b.id == action.id), None)
-        if builtin is not None and action.system_prompt == builtin.system_prompt:
-            return cfg[legacy_key]
-    return action.system_prompt
-
-
 def _chat_cfg_for(action_id):
     """(url, model, api_key, hint) for an action's chat call. Legacy ids keep
     their dedicated config; custom actions use the summarize endpoint."""
@@ -288,6 +275,12 @@ def _resolve_source_text(url, source):
     empty params and cached, so repeated chains are cheap."""
     if source == "transcript":
         return _ensure_transcript(url)
+    if source == "diarized":
+        text = cache.read_text(url, "transcript_diarized.txt")
+        if text is None:
+            _log("action", "diarized transcript not cached — running pipeline first")
+            text = _diarize_sync(url)
+        return text
     actions_registry.maybe_reload()
     upstream = actions_registry.get(source)
     if upstream is None:
@@ -309,7 +302,7 @@ def _run_action_sync(url, action, params):
             raise RuntimeError(f"missing required parameter: {p.name}")
 
     source_text = _resolve_source_text(url, action.source)
-    system_prompt = _system_prompt_for(action)
+    system_prompt = action.system_prompt
     for p in action.params:
         system_prompt = system_prompt.replace("{" + p.name + "}", str(params.get(p.name, "")))
 
@@ -345,11 +338,6 @@ def _run_action_job(job_id, url, action, params):
         job["status"] = "error"
         job["error"] = str(e)
         _log("action", "%s: ERROR: %s", action.id, e)
-
-
-def _run_summarize_sync(url):
-    """Synchronous summarize for use within chained pipelines."""
-    return _run_action_sync(url, _action_or_builtin("summarize"), {})
 
 
 def run_download(job_id, url, format_choice, format_id):
@@ -465,120 +453,102 @@ def _run_transcribe(job_id, url):
         _log("transcribe", "ERROR: %s", e)
 
 
-def _run_summarize(job_id, url):
-    _log("summarize", "start job=%s model=%s url=%s", job_id, cfg["summarize_model"], url)
-    _run_action_job(job_id, url, _action_or_builtin("summarize"), {})
+def _diarize_sync(url):
+    """Diarization pipeline, synchronous: transcript segments × speakrs
+    speaker turns → merged, speaker-labeled transcript; a best-effort LLM
+    pass names speakers from context cues + video metadata (non-fatal on
+    failure). Returns the final text; caches transcript_diarized.txt +
+    speakers.json."""
+    # 1. Transcript segments (auto-chain transcription if missing)
+    seg_raw = cache.read_text(url, "transcript_segments.json")
+    if seg_raw is None:
+        # Re-transcribe even when transcript.txt exists: pre-segments cache
+        # entries have no timestamps to align speaker turns against.
+        _log("diarize", "no cached segments — running transcription first")
+        audio_path = _ensure_audio(url)
+        result = llm_transcribe(
+            audio_path=audio_path,
+            url=cfg["stt_url"],
+            model=cfg["stt_model"],
+            api_key=cfg["stt_api_key"],
+            prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                    cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
+            api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+            word_timestamps=cfg["stt_word_timestamps"],
+        )
+        _save_transcript(url, result["text"], segments=result.get("segments"))
+        seg_raw = json.dumps(result.get("segments") or [])
+    transcript_segments = json.loads(seg_raw)
+    if not transcript_segments:
+        raise RuntimeError(
+            "STT backend returned no segment timestamps — diarization "
+            "needs them (oMLX Whisper models provide segments)"
+        )
 
+    # 2. Speaker turns from the audio (speakrs via C FFI)
+    audio_path = _ensure_audio(url)
+    t0 = time.time()
+    diar = diarize_file(audio_path)
+    _log("diarize", "diarization done in %.1fs (%d speakers, %d turns)",
+         time.time() - t0, len(diar["speakers"]), len(diar["segments"]))
 
-def _run_counterargue(job_id, url):
-    _log("counterargue", "start job=%s model=%s url=%s",
-         job_id, cfg["counterargue_model"], url)
-    _run_action_job(job_id, url, _action_or_builtin("counterargue"), {})
+    # 3. Merge + base formatting
+    merged = merge_speakers(transcript_segments, diar["segments"])
+    base_text = format_diarized(merged)
+    labels = speaker_label_map(merged)
+
+    # 4. Name speakers via the configured chat model (non-fatal)
+    names = {}
+    naming_error = None
+    if labels:
+        try:
+            meta = _fetch_and_cache_metadata(url)
+            system_prompt, user_content = build_naming_prompt(base_text, meta)
+            t0 = time.time()
+            resp_text = chat_completion(
+                url=cfg["summarize_url"],
+                model=cfg["summarize_model"],
+                api_key=cfg["summarize_api_key"],
+                system_prompt=system_prompt,
+                user_content=user_content,
+                api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
+            )
+            naming = parse_naming_response(resp_text)
+            names = apply_names(labels, naming)
+            _log("diarize", "naming done in %.1fs: %s", time.time() - t0,
+                 names or "(no confident names)")
+        except Exception as e:
+            naming_error = str(e)
+            _log("diarize", "naming failed (non-fatal): %s", e)
+
+    final_text = format_diarized(merged, names=names) if names else base_text
+    full = _metadata_header(url) + final_text
+    cache.write_text(url, "transcript_diarized.txt", full)
+    cache.write_text(url, "speakers.json", json.dumps({
+        "turns": diar["segments"],
+        "speakers": diar["speakers"],
+        "labels": labels,
+        "names": names,
+        "naming_error": naming_error,
+    }))
+    _log("diarize", "done (%d chars, %d named speakers)", len(full), len(names))
+    return full
 
 
 def _run_diarize(job_id, url):
-    """Diarization pipeline: transcript segments × speakrs speaker turns →
-    merged, speaker-labeled transcript; then a best-effort LLM pass names the
-    speakers from context cues (self-intros, address terms, video metadata).
-    Naming failure is non-fatal — generic 'Speaker N' labels remain."""
+    """Job wrapper over _diarize_sync."""
     job = jobs[job_id]
     _log("diarize", "start job=%s url=%s", job_id, url)
     try:
-        # 1. Transcript segments (auto-chain transcription if missing)
-        seg_raw = cache.read_text(url, "transcript_segments.json")
-        if seg_raw is None:
-            _log("diarize", "no cached segments — running transcription first")
-            audio_path = _ensure_audio(url)
-            t0 = time.time()
-            result = llm_transcribe(
-                audio_path=audio_path,
-                url=cfg["stt_url"],
-                model=cfg["stt_model"],
-                api_key=cfg["stt_api_key"],
-                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
-                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
-                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
-                word_timestamps=cfg["stt_word_timestamps"],
-            )
-            _save_transcript(url, result["text"], segments=result.get("segments"))
-            seg_raw = json.dumps(result.get("segments") or [])
-            _log("diarize", "STT done in %.1fs", time.time() - t0)
-        transcript_segments = json.loads(seg_raw)
-        if not transcript_segments:
-            raise RuntimeError(
-                "STT backend returned no segment timestamps — diarization "
-                "needs them (oMLX Whisper models provide segments)"
-            )
-
-        # 2. Speaker turns from the audio (speakrs via C FFI)
-        audio_path = _ensure_audio(url)
         job["progress"] = "diarizing"
-        t0 = time.time()
-        diar = diarize_file(audio_path)
-        _log("diarize", "diarization done in %.1fs (%d speakers, %d turns)",
-             time.time() - t0, len(diar["speakers"]), len(diar["segments"]))
-
-        # 3. Merge + base formatting
-        merged = merge_speakers(transcript_segments, diar["segments"])
-        base_text = format_diarized(merged)
-        labels = speaker_label_map(merged)
-
-        # 4. Name speakers via the configured chat model (non-fatal)
-        names = {}
-        naming_error = None
-        if labels:
-            job["progress"] = "naming speakers"
-            try:
-                meta = _fetch_and_cache_metadata(url)
-                system_prompt, user_content = build_naming_prompt(base_text, meta)
-                t0 = time.time()
-                resp_text = chat_completion(
-                    url=cfg["summarize_url"],
-                    model=cfg["summarize_model"],
-                    api_key=cfg["summarize_api_key"],
-                    system_prompt=system_prompt,
-                    user_content=user_content,
-                    api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
-                )
-                naming = parse_naming_response(resp_text)
-                names = apply_names(labels, naming)
-                _log("diarize", "naming done in %.1fs: %s", time.time() - t0,
-                     names or "(no confident names)")
-            except Exception as e:
-                naming_error = str(e)
-                _log("diarize", "naming failed (non-fatal): %s", e)
-
-        final_text = format_diarized(merged, names=names) if names else base_text
-        full = _metadata_header(url) + final_text
-        cache.write_text(url, "transcript_diarized.txt", full)
-        cache.write_text(url, "speakers.json", json.dumps({
-            "turns": diar["segments"],
-            "speakers": diar["speakers"],
-            "labels": labels,
-            "names": names,
-            "naming_error": naming_error,
-        }))
+        full = _diarize_sync(url)
         job["status"] = "done"
         job["text"] = full
         job["filename"] = "transcript_diarized.txt"
-        _log("diarize", "done (%d chars, %d named speakers)", len(full), len(names))
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
         _log("diarize", "ERROR: %s", e)
-
-
-def _run_translate(job_id, url, language, source):
-    """Legacy route shim. source='summary' is exactly the registry's translate
-    action (source chain: summarize); source='transcript' is a transient
-    variant of it rooted at the transcript instead."""
-    _log("translate", "start job=%s lang=%s source=%s model=%s url=%s",
-         job_id, language, source, cfg["translate_model"], url)
-    base = _action_or_builtin("translate")
-    if source != "summary":
-        base = Action(id="translate", name=base.name, source="transcript",
-                      system_prompt=base.system_prompt, params=base.params)
-    _run_action_job(job_id, url, base, {"language": language})
 
 
 @app.route("/")
@@ -1200,50 +1170,6 @@ def diarize_endpoint():
     return jsonify({"job_id": job_id})
 
 
-@app.route("/api/summarize", methods=["POST"])
-def summarize_endpoint():
-    data = request.json
-    url = data.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "No URL provided"}), 400
-
-    # Check cache first
-    cached_text = cache.read_text(url, "summary.txt")
-    if cached_text is not None:
-        return jsonify({"cached": True, "text": cached_text})
-
-    job_id = uuid.uuid4().hex[:10]
-    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
-
-    thread = threading.Thread(target=_run_summarize, args=(job_id, url))
-    thread.daemon = True
-    thread.start()
-
-    return jsonify({"job_id": job_id})
-
-
-@app.route("/api/counterargue", methods=["POST"])
-def counterargue_endpoint():
-    data = request.json
-    url = data.get("url", "").strip()
-    if not url:
-        return jsonify({"error": "No URL provided"}), 400
-
-    # Check cache first
-    cached_text = cache.read_text(url, "counterargue.txt")
-    if cached_text is not None:
-        return jsonify({"cached": True, "text": cached_text})
-
-    job_id = uuid.uuid4().hex[:10]
-    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
-
-    thread = threading.Thread(target=_run_counterargue, args=(job_id, url))
-    thread.daemon = True
-    thread.start()
-
-    return jsonify({"job_id": job_id})
-
-
 def _clean_text_for_tts(text):
     """Strip markdown that TTS reads literally.
 
@@ -1627,39 +1553,6 @@ def speak_download():
         return send_file(wav_path, mimetype="audio/wav",
                          as_attachment=True, download_name=f"{source}.wav")
     return jsonify({"error": "Audio not found"}), 404
-
-
-@app.route("/api/translate", methods=["POST"])
-def translate_endpoint():
-    data = request.json
-    url = data.get("url", "").strip()
-    language = data.get("language", "").strip()
-    source = data.get("source", "transcript").strip()
-
-    if not url:
-        return jsonify({"error": "No URL provided"}), 400
-    if not language:
-        return jsonify({"error": "No language provided"}), 400
-    if source not in ("transcript", "summary"):
-        return jsonify({"error": "source must be 'transcript' or 'summary'"}), 400
-
-    filename = _translate_filename(source, language)
-
-    # Check cache first
-    cached_text = cache.read_text(url, filename)
-    if cached_text is not None:
-        return jsonify({"cached": True, "text": cached_text})
-
-    job_id = uuid.uuid4().hex[:10]
-    jobs[job_id] = {"status": "processing", "type": "text", "url": url}
-
-    thread = threading.Thread(
-        target=_run_translate, args=(job_id, url, language, source),
-    )
-    thread.daemon = True
-    thread.start()
-
-    return jsonify({"job_id": job_id})
 
 
 @app.route("/api/text/<job_id>")

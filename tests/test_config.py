@@ -62,7 +62,6 @@ def test_summarize_defaults():
 	cfg = load_config()
 	assert cfg["summarize_url"] == "http://localhost:8000/v1/chat/completions"
 	assert cfg["summarize_model"] == "gemma4-heretical-mlx-8bit"
-	assert "summarize" in cfg["summarize_prompt"].lower() or "summary" in cfg["summarize_prompt"].lower()
 
 
 def test_translate_defaults():
@@ -70,18 +69,15 @@ def test_translate_defaults():
 	cfg = load_config()
 	assert cfg["translate_url"] == "http://localhost:8000/v1/chat/completions"
 	assert cfg["translate_model"] == "gemma4-heretical-mlx-8bit"
-	assert "{language}" in cfg["translate_prompt"]
 
 
 def test_env_overrides_all(monkeypatch):
 	monkeypatch.setenv("RECLIP_STT_URL", "http://myserver:9999/v1/audio/transcriptions")
 	monkeypatch.setenv("RECLIP_STT_API_KEY", "sk-test")
-	monkeypatch.setenv("RECLIP_SUMMARIZE_PROMPT", "Custom summary prompt")
 	from config import load_config
 	cfg = load_config()
 	assert cfg["stt_url"] == "http://myserver:9999/v1/audio/transcriptions"
 	assert cfg["stt_api_key"] == "sk-test"
-	assert cfg["summarize_prompt"] == "Custom summary prompt"
 
 
 # --- New tests for file-based config and hot-reload ---
