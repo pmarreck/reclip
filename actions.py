@@ -65,7 +65,7 @@ def _builtin_actions():
 			)],
 		),
 		Action(
-			id="counterargue", name="Counterargue", source="summarize",
+			id="counterargue", name="Counterargue", source="transcript",
 			system_prompt=DEFAULT_COUNTERARGUE_PROMPT, params=[],
 		),
 	]

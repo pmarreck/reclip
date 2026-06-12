@@ -1149,3 +1149,112 @@ class TestSttBiasPrompt:
     def test_empty_metadata_returns_empty(self):
         import app
         assert app._stt_bias_prompt({}, explicit_prompt="", enabled=True) == ""
+
+
+class TestActionEngine:
+    """_run_action_sync: the generic engine behind all LLM actions. Source
+    chains resolve recursively (translate → summarize → transcript); params
+    interpolate into {placeholders}; outputs land in the legacy filenames so
+    the migration is byte-identical."""
+
+    URL = "https://example.com/action-engine"
+
+    def _seed_transcript(self, app):
+        app.cache.write_text(self.URL, "transcript.txt", "the transcript",
+                             meta={"url": self.URL, "title": "T"})
+
+    def test_summarize_writes_legacy_file(self, tmp_cache, monkeypatch):
+        import app
+        self._seed_transcript(app)
+        calls = []
+
+        def fake_chat(**kw):
+            calls.append(kw)
+            return "THE SUMMARY"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        out = app._run_action_sync(self.URL, app.actions_registry.get("summarize"), {})
+        assert out == "THE SUMMARY"
+        assert app.cache.read_text(self.URL, "summary.txt") == "THE SUMMARY"
+        assert calls[0]["user_content"] == "the transcript"
+        # honors the legacy per-action endpoint config
+        assert calls[0]["model"] == app.cfg["summarize_model"]
+
+    def test_translate_chains_summarize(self, tmp_cache, monkeypatch):
+        import app
+        self._seed_transcript(app)
+
+        def fake_chat(**kw):
+            if "Spanish" in kw["system_prompt"]:
+                return "EL RESUMEN"
+            return "THE SUMMARY"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        out = app._run_action_sync(self.URL, app.actions_registry.get("translate"),
+                                   {"language": "Spanish"})
+        assert out == "EL RESUMEN"
+        # upstream ran and cached
+        assert app.cache.read_text(self.URL, "summary.txt") == "THE SUMMARY"
+        # legacy translate-of-summary filename
+        assert app.cache.read_text(self.URL, "summary-spanish.txt") == "EL RESUMEN"
+
+    def test_translate_reuses_cached_summary(self, tmp_cache, monkeypatch):
+        import app
+        self._seed_transcript(app)
+        app.cache.write_text(self.URL, "summary.txt", "CACHED SUMMARY")
+        seen = []
+
+        def fake_chat(**kw):
+            seen.append(kw)
+            return "OUT"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        app._run_action_sync(self.URL, app.actions_registry.get("translate"),
+                             {"language": "French"})
+        # only ONE chat call (translate) — summarize was served from cache
+        assert len(seen) == 1
+        assert seen[0]["user_content"] == "CACHED SUMMARY"
+
+    def test_missing_required_param_raises(self, tmp_cache, monkeypatch):
+        import app
+        self._seed_transcript(app)
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: "X")
+        with pytest.raises(RuntimeError, match="language"):
+            app._run_action_sync(self.URL, app.actions_registry.get("translate"), {})
+
+    def test_custom_action_uses_action_file_and_default_endpoint(self, tmp_cache, monkeypatch):
+        import app
+        from actions import Action
+        self._seed_transcript(app)
+        calls = []
+
+        def fake_chat(**kw):
+            calls.append(kw)
+            return "CUSTOM OUT"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        custom = Action(id="tldr", name="TL;DR", source="transcript",
+                        system_prompt="compress hard")
+        out = app._run_action_sync(self.URL, custom, {})
+        assert out == "CUSTOM OUT"
+        assert app.cache.read_text(self.URL, "action-tldr.txt") == "CUSTOM OUT"
+        # falls back to the summarize endpoint config for custom actions
+        assert calls[0]["model"] == app.cfg["summarize_model"]
+
+    def test_actions_json_prompt_edit_wins_over_config(self, tmp_cache, monkeypatch):
+        """Precedence: user-edited actions.json prompt > RECLIP_*_PROMPT config
+        > built-in default."""
+        import app
+        from actions import Action
+        self._seed_transcript(app)
+        seen = []
+
+        def fake_chat(**kw):
+            seen.append(kw)
+            return "X"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        edited = Action(id="summarize", name="Summarize", source="transcript",
+                        system_prompt="my custom edited prompt")
+        app._run_action_sync(self.URL, edited, {})
+        assert seen[0]["system_prompt"] == "my custom edited prompt"

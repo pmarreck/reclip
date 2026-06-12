@@ -249,3 +249,13 @@ class TestHotReload:
 		assert a.get("summarize").system_prompt == "good"
 		# Error surfaces for the UI to display
 		assert a.last_error is not None
+
+
+class TestCounterargueSource:
+	def test_counterargue_sources_transcript(self, isolated_config_dir):
+		"""Legacy _run_counterargue reads the transcript, not the summary —
+		the registry default must match for byte-identical migration."""
+		from actions import Actions
+		a = Actions()
+		assert a.get("counterargue").source == "transcript"
+		assert a.resolve_chain("counterargue") == ["counterargue"]

@@ -19,6 +19,7 @@ from service import ServiceManager, is_running_as_service
 import media_extractor
 from media_extractor import classify_url
 from diarizer import diarize_file, DiarizerError, available as diarizer_available
+from actions import Actions as ActionsRegistry, Action, ActionParam, ActionError
 from speakers import (
     merge_speakers, format_diarized, speaker_label_map,
     build_naming_prompt, parse_naming_response, apply_names,
@@ -30,6 +31,7 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 cfg = load_config()
 cache = Cache(cfg["cache_dir"], cfg["cache_max_mb"])
+actions_registry = ActionsRegistry()
 
 jobs = {}
 
@@ -198,32 +200,155 @@ def _translate_filename(source, language):
     return f"translation-{lang}.txt"
 
 
-def _run_summarize_sync(url):
-    """Synchronous summarize for use within translate pipeline."""
-    transcript = cache.read_text(url, "transcript.txt")
-    if transcript is None:
-        audio_path = _ensure_audio(url)
-        result = llm_transcribe(
-            audio_path=audio_path,
-            url=cfg["stt_url"],
-            model=cfg["stt_model"],
-            api_key=cfg["stt_api_key"],
-            prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
-                                    cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
-            api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
-            word_timestamps=cfg["stt_word_timestamps"],
-        )
-        transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
-    summary = chat_completion(
-        url=cfg["summarize_url"],
-        model=cfg["summarize_model"],
-        api_key=cfg["summarize_api_key"],
-        system_prompt=cfg["summarize_prompt"],
-        user_content=transcript,
-        api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
+def _action_or_builtin(action_id):
+    """Registry action, falling back to the shipped builtin if the user's
+    actions.json removed/renamed it (legacy routes must keep working)."""
+    actions_registry.maybe_reload()
+    a = actions_registry.get(action_id)
+    if a is not None:
+        return a
+    from actions import _builtin_actions
+    builtin = next((b for b in _builtin_actions() if b.id == action_id), None)
+    if builtin is None:
+        raise RuntimeError(f"unknown action: {action_id!r}")
+    return builtin
+
+
+def _ensure_transcript(url):
+    """transcript.txt contents, running download + STT first if missing."""
+    text = cache.read_text(url, "transcript.txt")
+    if text is not None:
+        return text
+    audio_path = _ensure_audio(url)
+    result = llm_transcribe(
+        audio_path=audio_path,
+        url=cfg["stt_url"],
+        model=cfg["stt_model"],
+        api_key=cfg["stt_api_key"],
+        prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
+                                cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
+        api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
+        word_timestamps=cfg["stt_word_timestamps"],
     )
-    cache.write_text(url, "summary.txt", summary)
-    return summary
+    return _save_transcript(url, result["text"], segments=result.get("segments"))
+
+
+def _slugify_params(params):
+    """Stable filename fragment from param values (legacy-compatible for
+    translate's language: 'Brazilian Portuguese' → 'brazilian-portuguese')."""
+    vals = [str(params[k]).lower().strip().replace(" ", "-")
+            for k in sorted(params) if str(params.get(k, "")).strip()]
+    return "-".join(vals)
+
+
+def _action_output_filename(action, params):
+    """Cache filename for an action's output. The three legacy ids keep their
+    historical filenames (other features — TTS source map, recents — read
+    them); custom actions use the action-<id> namespace."""
+    params = params or {}
+    if action.id == "summarize":
+        return "summary.txt"
+    if action.id == "counterargue":
+        return "counterargue.txt"
+    if action.id in ("translate", "translate_transcript") and "language" in params:
+        legacy_source = "summary" if action.source == "summarize" else "transcript"
+        return _translate_filename(legacy_source, params["language"])
+    slug = _slugify_params(params)
+    return f"action-{action.id}{'-' + slug if slug else ''}.txt"
+
+
+def _system_prompt_for(action):
+    """Prompt precedence: a user-edited actions.json prompt wins; an unedited
+    builtin honors the legacy RECLIP_<ID>_PROMPT config override; otherwise
+    the built-in default (identical text either way)."""
+    legacy_key = f"{action.id}_prompt"
+    if legacy_key in cfg.as_dict():
+        from actions import _builtin_actions
+        builtin = next((b for b in _builtin_actions() if b.id == action.id), None)
+        if builtin is not None and action.system_prompt == builtin.system_prompt:
+            return cfg[legacy_key]
+    return action.system_prompt
+
+
+def _chat_cfg_for(action_id):
+    """(url, model, api_key, hint) for an action's chat call. Legacy ids keep
+    their dedicated config; custom actions use the summarize endpoint."""
+    if cfg.get(f"{action_id}_url"):
+        return (cfg[f"{action_id}_url"], cfg[f"{action_id}_model"],
+                cfg[f"{action_id}_api_key"],
+                f"RECLIP_{action_id.upper()}_API_KEY or RECLIP_API_KEY")
+    return (cfg["summarize_url"], cfg["summarize_model"], cfg["summarize_api_key"],
+            "RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY")
+
+
+def _resolve_source_text(url, source):
+    """Text for an action source: 'transcript' or another action's id.
+    Missing upstream outputs are computed recursively (auto-chain) with
+    empty params and cached, so repeated chains are cheap."""
+    if source == "transcript":
+        return _ensure_transcript(url)
+    actions_registry.maybe_reload()
+    upstream = actions_registry.get(source)
+    if upstream is None:
+        raise RuntimeError(f"unknown action source: {source!r}")
+    fname = _action_output_filename(upstream, {})
+    text = cache.read_text(url, fname)
+    if text is None:
+        _log("action", "source %r not cached — running it first", source)
+        text = _run_action_sync(url, upstream, {})
+    return text
+
+
+def _run_action_sync(url, action, params):
+    """Generic LLM action: resolve source text, interpolate {params} into the
+    system prompt, run the chat call, cache the output. Returns the text."""
+    params = params or {}
+    for p in action.params:
+        if p.required and not str(params.get(p.name, "")).strip():
+            raise RuntimeError(f"missing required parameter: {p.name}")
+
+    source_text = _resolve_source_text(url, action.source)
+    system_prompt = _system_prompt_for(action)
+    for p in action.params:
+        system_prompt = system_prompt.replace("{" + p.name + "}", str(params.get(p.name, "")))
+
+    chat_url, chat_model, chat_key, chat_hint = _chat_cfg_for(action.id)
+    _log("action", "%s: calling LLM (model=%s, source=%d chars)",
+         action.id, chat_model, len(source_text))
+    t0 = time.time()
+    out = chat_completion(
+        url=chat_url,
+        model=chat_model,
+        api_key=chat_key,
+        system_prompt=system_prompt,
+        user_content=source_text,
+        api_key_hint=chat_hint,
+    )
+    filename = _action_output_filename(action, params)
+    cache.write_text(url, filename, out)
+    _log("action", "%s: done in %.1fs (%d chars -> %s)",
+         action.id, time.time() - t0, len(out), filename)
+    return out
+
+
+def _run_action_job(job_id, url, action, params):
+    """Job wrapper for _run_action_sync — populates the jobs dict like every
+    other background op."""
+    job = jobs[job_id]
+    try:
+        out = _run_action_sync(url, action, params)
+        job["status"] = "done"
+        job["text"] = out
+        job["filename"] = _action_output_filename(action, params)
+    except Exception as e:
+        job["status"] = "error"
+        job["error"] = str(e)
+        _log("action", "%s: ERROR: %s", action.id, e)
+
+
+def _run_summarize_sync(url):
+    """Synchronous summarize for use within chained pipelines."""
+    return _run_action_sync(url, _action_or_builtin("summarize"), {})
 
 
 def run_download(job_id, url, format_choice, format_id):
@@ -340,85 +465,14 @@ def _run_transcribe(job_id, url):
 
 
 def _run_summarize(job_id, url):
-    job = jobs[job_id]
     _log("summarize", "start job=%s model=%s url=%s", job_id, cfg["summarize_model"], url)
-    try:
-        transcript = cache.read_text(url, "transcript.txt")
-        if transcript is None:
-            _log("summarize", "no transcript cached — fetching audio + STT first")
-            audio_path = _ensure_audio(url)
-            t0 = time.time()
-            result = llm_transcribe(
-                audio_path=audio_path,
-                url=cfg["stt_url"],
-                model=cfg["stt_model"],
-                api_key=cfg["stt_api_key"],
-                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
-                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
-                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
-                word_timestamps=cfg["stt_word_timestamps"],
-            )
-            transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
-            _log("summarize", "STT done in %.1fs (%d chars)", time.time() - t0, len(transcript))
-        _log("summarize", "calling LLM (transcript=%d chars)", len(transcript))
-        t0 = time.time()
-        summary = chat_completion(
-            url=cfg["summarize_url"],
-            model=cfg["summarize_model"],
-            api_key=cfg["summarize_api_key"],
-            system_prompt=cfg["summarize_prompt"],
-            user_content=transcript,
-            api_key_hint="RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
-        )
-        cache.write_text(url, "summary.txt", summary)
-        job["status"] = "done"
-        job["text"] = summary
-        job["filename"] = "summary.txt"
-        _log("summarize", "done in %.1fs (%d chars)", time.time() - t0, len(summary))
-    except Exception as e:
-        job["status"] = "error"
-        job["error"] = str(e)
-        _log("summarize", "ERROR: %s", e)
+    _run_action_job(job_id, url, _action_or_builtin("summarize"), {})
 
 
 def _run_counterargue(job_id, url):
-    job = jobs[job_id]
-    _log("counterargue", "start job=%s model=%s url=%s", job_id, cfg["counterargue_model"], url)
-    try:
-        transcript = cache.read_text(url, "transcript.txt")
-        if transcript is None:
-            _log("counterargue", "no transcript cached — fetching audio + STT first")
-            audio_path = _ensure_audio(url)
-            result = llm_transcribe(
-                audio_path=audio_path,
-                url=cfg["stt_url"],
-                model=cfg["stt_model"],
-                api_key=cfg["stt_api_key"],
-                prompt=_stt_bias_prompt(_fetch_and_cache_metadata(url),
-                                        cfg["stt_prompt"], cfg["stt_metadata_prompt"]),
-                api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
-                word_timestamps=cfg["stt_word_timestamps"],
-            )
-            transcript = _save_transcript(url, result["text"], segments=result.get("segments"))
-        _log("counterargue", "calling LLM (transcript=%d chars)", len(transcript))
-        t0 = time.time()
-        counterargument = chat_completion(
-            url=cfg["counterargue_url"],
-            model=cfg["counterargue_model"],
-            api_key=cfg["counterargue_api_key"],
-            system_prompt=cfg["counterargue_prompt"],
-            user_content=transcript,
-            api_key_hint="RECLIP_COUNTERARGUE_API_KEY or RECLIP_API_KEY",
-        )
-        cache.write_text(url, "counterargue.txt", counterargument)
-        job["status"] = "done"
-        job["text"] = counterargument
-        job["filename"] = "counterargue.txt"
-        _log("counterargue", "done in %.1fs (%d chars)", time.time() - t0, len(counterargument))
-    except Exception as e:
-        job["status"] = "error"
-        job["error"] = str(e)
-        _log("counterargue", "ERROR: %s", e)
+    _log("counterargue", "start job=%s model=%s url=%s",
+         job_id, cfg["counterargue_model"], url)
+    _run_action_job(job_id, url, _action_or_builtin("counterargue"), {})
 
 
 def _run_diarize(job_id, url):
@@ -514,60 +568,18 @@ def _run_diarize(job_id, url):
 
 
 def _run_translate(job_id, url, language, source):
-    job = jobs[job_id]
+    """Legacy route shim. source='summary' is exactly the registry's translate
+    action (source chain: summarize); source='transcript' is a transient
+    variant of it rooted at the transcript instead."""
     _log("translate", "start job=%s lang=%s source=%s model=%s url=%s",
          job_id, language, source, cfg["translate_model"], url)
-    try:
-        if source == "summary":
-            source_text = cache.read_text(url, "summary.txt")
-            if source_text is None:
-                _log("translate", "no summary cached — running summarize first")
-                _run_summarize_sync(url)
-                source_text = cache.read_text(url, "summary.txt")
-        else:
-            source_text = cache.read_text(url, "transcript.txt")
-            if source_text is None:
-                _log("translate", "no transcript cached — fetching audio + STT first")
-                audio_path = _ensure_audio(url)
-                result = llm_transcribe(
-                    audio_path=audio_path,
-                    url=cfg["stt_url"],
-                    model=cfg["stt_model"],
-                    api_key=cfg["stt_api_key"],
-                    prompt=cfg["stt_prompt"],
-                    api_key_hint="RECLIP_STT_API_KEY or RECLIP_API_KEY",
-                )
-                source_text = _save_transcript(url, result["text"], segments=result.get("segments"))
-
-        if source_text is None:
-            raise RuntimeError(f"Could not obtain {source} text")
-
-        prompt_template = cfg["translate_prompt"]
-        system_prompt = prompt_template.replace("{language}", language)
-
-        _log("translate", "calling LLM (source=%d chars → %s)", len(source_text), language)
-        t0 = time.time()
-        translation = chat_completion(
-            url=cfg["translate_url"],
-            model=cfg["translate_model"],
-            api_key=cfg["translate_api_key"],
-            system_prompt=system_prompt,
-            user_content=source_text,
-            api_key_hint="RECLIP_TRANSLATE_API_KEY or RECLIP_API_KEY",
-        )
-        filename = _translate_filename(source, language)
-        cache.write_text(url, filename, translation)
-        job["status"] = "done"
-        job["text"] = translation
-        job["filename"] = filename
-        _log("translate", "done in %.1fs (%d chars)", time.time() - t0, len(translation))
-    except Exception as e:
-        job["status"] = "error"
-        job["error"] = str(e)
-        _log("translate", "ERROR: %s", e)
+    base = _action_or_builtin("translate")
+    if source != "summary":
+        base = Action(id="translate", name=base.name, source="transcript",
+                      system_prompt=base.system_prompt, params=base.params)
+    _run_action_job(job_id, url, base, {"language": language})
 
 
-@app.route("/")
 def index():
     return render_template("index.html")
 
