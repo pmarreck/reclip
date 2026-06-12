@@ -835,9 +835,7 @@
         actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>
           <button class="card-dl-btn card-btn-alt" onclick="transcribeCard(${idx})">Transcribe</button>
           <button class="card-dl-btn card-btn-alt" onclick="speakersCard(${idx})">Speakers</button>
-          <button class="card-dl-btn card-btn-alt" onclick="summarizeCard(${idx})">Summarize</button>
-          <button class="card-dl-btn card-btn-alt" onclick="toggleTranslate(${idx})">Translate</button>
-          <button class="card-dl-btn card-btn-alt" onclick="counterargueCard(${idx})">Counterargue</button>
+          ${actionButtonsHtml(idx)}
           ${qualityChips}`;
       } else if (c.status === 'downloading') {
         actionHtml = `<span class="card-status downloading"><span class="spin"></span> Downloading...</span>`;
@@ -851,10 +849,11 @@
 
       // Per-operation status indicators
       let opsHtml = '';
-      for (const op of ['transcribe', 'speakers', 'summarize', 'translate_transcript', 'translate_summary', 'counterargue']) {
+      for (const op of ['transcribe', 'speakers', ...actionDefs.map(a => a.id)]) {
         const opState = c.ops?.[op];
         if (!opState) continue;
-        const label = op.replace(/_/g, ' ');
+        const def_ = actionDefs.find(a => a.id === op);
+        const label = def_ ? def_.name : op.replace(/_/g, ' ');
         if (opState.status === 'processing') {
           opsHtml += `<div class="card-status downloading"><span class="spin"></span> ${label}...</div>`;
         } else if (opState.status === 'done') {
@@ -894,16 +893,20 @@
         }
       }
 
-      let translateHtml = '';
-      if (c.showTranslate) {
-        translateHtml = `
-          <div class="translate-panel" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-            <input type="text" class="translate-lang" id="lang-${idx}" value="${esc(c.translateLang || 'English')}"
-              placeholder="Language" style="padding:5px 10px;border:1.5px solid var(--card-border);border-radius:7px;
-              font-family:'DM Mono',monospace;font-size:0.7rem;width:110px;background:var(--card);color:var(--fg);">
-            <button class="card-dl-btn card-btn-alt" onclick="translateCard(${idx}, 'transcript')">Translate Transcript</button>
-            <button class="card-dl-btn card-btn-alt" onclick="translateCard(${idx}, 'summary')">Translate Summary</button>
-          </div>`;
+      let paramsHtml = '';
+      if (c.showParamsFor) {
+        const def = actionDefs.find(a => a.id === c.showParamsFor);
+        if (def) {
+          const inputs = def.params.map(p => `
+            <input type="text" id="param-${idx}-${esc(p.name)}" value="${esc(c.lastParams?.[p.name] || '')}"
+              placeholder="${esc(p.label || p.name)}" style="padding:5px 10px;border:1.5px solid var(--card-border);border-radius:7px;
+              font-family:'DM Mono',monospace;font-size:0.7rem;width:130px;background:var(--card);color:var(--fg);">`).join('');
+          paramsHtml = `
+            <div class="translate-panel" style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              ${inputs}
+              <button class="card-dl-btn card-btn-alt" onclick="runActionWithParams(${idx}, '${esc(def.id)}')">${esc(def.name)}</button>
+            </div>`;
+        }
       }
 
       el.innerHTML = `
@@ -912,7 +915,7 @@
           <div class="card-title">${esc(c.title || 'Untitled')}</div>
           <div class="card-meta">${esc(c.uploader)}${c.duration ? ' · ' + fmtDur(c.duration) : ''}</div>
           <div class="card-actions">${actionHtml}</div>
-          ${translateHtml}
+          ${paramsHtml}
           <div class="card-ops" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">${opsHtml}</div>
           ${renderCacheControls(idx, c)}
         </div>
@@ -1088,7 +1091,7 @@
         if (cardData[i].status !== 'ready') continue;
         if (op === 'download') await dlCard(i);
         else if (op === 'transcribe') await transcribeCard(i);
-        else if (op === 'summarize') await summarizeCard(i);
+        else if (op === 'summarize') await runAction(i, 'summarize', {});
       }
     }
 
@@ -1190,12 +1193,6 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Download All'; }
     }
 
-    function toggleTranslate(idx) {
-      cardData[idx].showTranslate = !cardData[idx].showTranslate;
-      if (!cardData[idx].translateLang) cardData[idx].translateLang = 'English';
-      renderCard(idx);
-    }
-
     function toggleExpand(idx, opKey) {
       const op = cardData[idx].ops?.[opKey];
       if (op) op.expanded = !op.expanded;
@@ -1214,16 +1211,19 @@
       });
     }
 
-    function _opToSource(opKey) {
-      // Map UI op key to API source name
-      const map = {
-        'transcribe': 'transcript',
-        'summarize': 'summary',
-        'counterargue': 'counterargue',
-        'translate_transcript': null,  // needs language
-        'translate_summary': null,     // needs language
-      };
-      return map[opKey];
+    function _opToSource(opKey, op) {
+      // Map UI op key to the API speak-source token
+      const fixed = { transcribe: 'transcript', speakers: 'diarized',
+                      summarize: 'summary', counterargue: 'counterargue' };
+      if (fixed[opKey]) return fixed[opKey];
+      const def = actionDefs.find(a => a.id === opKey);
+      if (!def) return null;
+      const slug = Object.keys(op?.params || {}).sort()
+        .map(k => String(op.params[k]).toLowerCase().trim().replace(/ /g, '-'))
+        .filter(Boolean).join('-');
+      if (opKey === 'translate') return `summary-${slug}`;
+      if (opKey === 'translate_transcript') return `translation-${slug}`;
+      return `action-${opKey}${slug ? '-' + slug : ''}`;
     }
 
     async function listenText(idx, opKey) {
@@ -1236,11 +1236,12 @@
       renderCard(idx);
 
       // Map op key to API source param
-      let source = _opToSource(opKey);
+      const source = _opToSource(opKey, op);
       if (!source) {
-        // Translation — need to reconstruct the filename
-        const lang = (c.translateLang || 'English').toLowerCase().trim().replace(/ /g, '-');
-        source = opKey === 'translate_summary' ? `summary-${lang}` : `translation-${lang}`;
+        op.audioLoading = false;
+        op.audioError = 'No speakable source for this result';
+        renderCard(idx);
+        return;
       }
 
       try {
@@ -1329,11 +1330,8 @@
 
     async function downloadAudio(idx, opKey, format) {
       const c = cardData[idx];
-      let source = _opToSource(opKey);
-      if (!source) {
-        const lang = (c.translateLang || 'English').toLowerCase().trim().replace(/ /g, '-');
-        source = opKey === 'translate_summary' ? `summary-${lang}` : `translation-${lang}`;
-      }
+      const source = _opToSource(opKey, c.ops?.[opKey]);
+      if (!source) return;
       try {
         const res = await fetch('/api/speak/download', {
           method: 'POST',
@@ -1385,33 +1383,94 @@
       }
     }
 
-    async function summarizeCard(idx) {
+    // ---- Registry-driven actions (buttons generated from /api/actions) ----
+    let actionDefs = [];
+    let actionsLastError = null;
+
+    async function loadActions() {
+      try {
+        const res = await fetch('/api/actions');
+        const data = await res.json();
+        actionDefs = data.actions || [];
+        actionsLastError = data.last_error || null;
+        renderActionsError();
+        cardData.forEach((_, i) => renderCard(i));
+      } catch (err) {
+        console.warn('could not load actions:', err);
+      }
+    }
+
+    function renderActionsError() {
+      let el = document.getElementById('actions-error');
+      if (!actionsLastError) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'actions-error';
+        el.style.cssText = 'margin:10px 0;padding:8px 12px;border:1.5px solid var(--error);border-radius:9px;color:var(--error);font-size:0.7rem;';
+        const cards = document.getElementById('cards');
+        cards.parentNode.insertBefore(el, cards);
+      }
+      el.textContent = `actions.json: ${actionsLastError} — using last good configuration`;
+    }
+
+    function actionButtonsHtml(idx) {
+      return actionDefs.map(def => {
+        const onclick = def.params.length
+          ? `toggleActionParams(${idx}, '${esc(def.id)}')`
+          : `runAction(${idx}, '${esc(def.id)}', {})`;
+        return `<button class="card-dl-btn card-btn-alt" onclick="${onclick}">${esc(def.name)}</button>`;
+      }).join('\n          ');
+    }
+
+    function toggleActionParams(idx, actionId) {
+      const c = cardData[idx];
+      c.showParamsFor = c.showParamsFor === actionId ? null : actionId;
+      renderCard(idx);
+    }
+
+    function runActionWithParams(idx, actionId) {
+      const def = actionDefs.find(a => a.id === actionId);
+      const params = {};
+      for (const p of (def?.params || [])) {
+        const input = document.getElementById(`param-${idx}-${p.name}`);
+        params[p.name] = input ? input.value.trim() : '';
+        if (p.required && !params[p.name]) {
+          input?.focus();
+          return;
+        }
+      }
+      cardData[idx].lastParams = params;
+      cardData[idx].showParamsFor = null;
+      runAction(idx, actionId, params);
+    }
+
+    async function runAction(idx, actionId, params) {
       const c = cardData[idx];
       _initOps(idx);
-      c.ops.summarize = { status: 'processing' };
+      c.ops[actionId] = { status: 'processing', params: params };
       renderCard(idx);
 
       try {
-        const res = await fetch('/api/summarize', {
+        const res = await fetch(`/api/action/${encodeURIComponent(actionId)}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: c.url, title: c.title || '' }),
+          body: JSON.stringify({ url: c.url, params: params }),
         });
         const data = await res.json();
         if (data.error) {
-          c.ops.summarize = { status: 'error', error: data.error };
+          c.ops[actionId] = { status: 'error', error: data.error };
           renderCard(idx);
           return;
         }
         if (data.cached) {
-          c.ops.summarize = { status: 'done', text: data.text, jobId: null };
+          c.ops[actionId] = { status: 'done', text: data.text, jobId: null, params: params };
           renderCard(idx);
           return;
         }
-        c.ops.summarize.jobId = data.job_id;
-        pollOp(idx, 'summarize', data.job_id);
+        c.ops[actionId].jobId = data.job_id;
+        pollOp(idx, actionId, data.job_id);
       } catch (err) {
-        c.ops.summarize = { status: 'error', error: err.message };
+        c.ops[actionId] = { status: 'error', error: err.message };
         renderCard(idx);
       }
     }
@@ -1443,72 +1502,6 @@
         pollOp(idx, 'speakers', data.job_id);
       } catch (err) {
         c.ops.speakers = { status: 'error', error: err.message };
-        renderCard(idx);
-      }
-    }
-
-    async function counterargueCard(idx) {
-      const c = cardData[idx];
-      _initOps(idx);
-      c.ops.counterargue = { status: 'processing' };
-      renderCard(idx);
-
-      try {
-        const res = await fetch('/api/counterargue', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: c.url, title: c.title || '' }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          c.ops.counterargue = { status: 'error', error: data.error };
-          renderCard(idx);
-          return;
-        }
-        if (data.cached) {
-          c.ops.counterargue = { status: 'done', text: data.text, jobId: null };
-          renderCard(idx);
-          return;
-        }
-        c.ops.counterargue.jobId = data.job_id;
-        pollOp(idx, 'counterargue', data.job_id);
-      } catch (err) {
-        c.ops.counterargue = { status: 'error', error: err.message };
-        renderCard(idx);
-      }
-    }
-
-    async function translateCard(idx, source) {
-      const c = cardData[idx];
-      const langInput = document.getElementById(`lang-${idx}`);
-      const language = langInput ? langInput.value.trim() : 'English';
-      c.translateLang = language;
-      _initOps(idx);
-      const opKey = source === 'summary' ? 'translate_summary' : 'translate_transcript';
-      c.ops[opKey] = { status: 'processing' };
-      renderCard(idx);
-
-      try {
-        const res = await fetch('/api/translate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: c.url, title: c.title || '', language, source }),
-        });
-        const data = await res.json();
-        if (data.error) {
-          c.ops[opKey] = { status: 'error', error: data.error };
-          renderCard(idx);
-          return;
-        }
-        if (data.cached) {
-          c.ops[opKey] = { status: 'done', text: data.text, jobId: null };
-          renderCard(idx);
-          return;
-        }
-        c.ops[opKey].jobId = data.job_id;
-        pollOp(idx, opKey, data.job_id);
-      } catch (err) {
-        c.ops[opKey] = { status: 'error', error: err.message };
         renderCard(idx);
       }
     }
@@ -1671,8 +1664,9 @@
       cards.parentNode.insertBefore(bar, cards);
     }
 
-    // Kick off the recents fetch once the script has parsed.
+    // Kick off the recents + actions fetches once the script has parsed.
     loadCacheEntries();
+    loadActions();
 
     async function openSettings() {
       if (!_settingsLoopback) return;

@@ -35,7 +35,7 @@ class TestDefaults:
 		from actions import Actions
 		a = Actions()
 		ids = [x.id for x in a.list()]
-		assert ids == ["summarize", "translate", "counterargue"]
+		assert ids == ["summarize", "translate", "translate_transcript", "counterargue"]
 
 	def test_first_run_seeds_user_file(self, isolated_config_dir):
 		"""On first load with no user file, actions.json is created from defaults."""
@@ -155,7 +155,7 @@ class TestValidation:
 		from actions import Actions
 		a = Actions()
 		# Fell back to built-ins
-		assert [x.id for x in a.list()] == ["summarize", "translate", "counterargue"]
+		assert [x.id for x in a.list()] == ["summarize", "translate", "translate_transcript", "counterargue"]
 		err = capsys.readouterr().err
 		assert "cycle" in err.lower() or "cyclic" in err.lower()
 
@@ -168,7 +168,7 @@ class TestValidation:
 		})
 		from actions import Actions
 		a = Actions()
-		assert [x.id for x in a.list()] == ["summarize", "translate", "counterargue"]
+		assert [x.id for x in a.list()] == ["summarize", "translate", "translate_transcript", "counterargue"]
 		err = capsys.readouterr().err
 		assert "ghost" in err or "unknown" in err.lower()
 
@@ -182,14 +182,14 @@ class TestValidation:
 		})
 		from actions import Actions
 		a = Actions()
-		assert [x.id for x in a.list()] == ["summarize", "translate", "counterargue"]
+		assert [x.id for x in a.list()] == ["summarize", "translate", "translate_transcript", "counterargue"]
 
 	def test_malformed_json_falls_back_to_defaults(self, isolated_config_dir, capsys):
 		isolated_config_dir.mkdir(parents=True, exist_ok=True)
 		(isolated_config_dir / "actions.json").write_text("{ not valid json")
 		from actions import Actions
 		a = Actions()
-		assert [x.id for x in a.list()] == ["summarize", "translate", "counterargue"]
+		assert [x.id for x in a.list()] == ["summarize", "translate", "translate_transcript", "counterargue"]
 		err = capsys.readouterr().err
 		assert "actions.json" in err or "parse" in err.lower() or "json" in err.lower()
 
@@ -203,7 +203,7 @@ class TestValidation:
 		})
 		from actions import Actions
 		a = Actions()
-		assert [x.id for x in a.list()] == ["summarize", "translate", "counterargue"]
+		assert [x.id for x in a.list()] == ["summarize", "translate", "translate_transcript", "counterargue"]
 
 
 class TestHotReload:

@@ -1,4 +1,5 @@
 import io
+import re
 import os
 import sys
 import uuid
@@ -580,6 +581,7 @@ def _run_translate(job_id, url, language, source):
     _run_action_job(job_id, url, base, {"language": language})
 
 
+@app.route("/")
 def index():
     return render_template("index.html")
 
@@ -1442,20 +1444,30 @@ def _resolve_voice_reference(url):
     return (voice_clip, ref_text or "")
 
 
+def _speak_source_filename(source):
+    """Map a speak 'source' token to its cache filename, or None when it
+    doesn't denote a known text artifact (also the path-traversal guard:
+    only whitelisted names and safe generated prefixes resolve)."""
+    fixed = {
+        "transcript": "transcript.txt",
+        "summary": "summary.txt",
+        "counterargue": "counterargue.txt",
+        "diarized": "transcript_diarized.txt",
+    }
+    if source in fixed:
+        return fixed[source]
+    safe = re.fullmatch(r"(translation|summary|action)-[a-z0-9][a-z0-9-]*", source or "")
+    if safe:
+        return source + ".txt"
+    return None
+
+
 def _run_speak(job_id, url, source, voice_override):
     job = jobs[job_id]
     _log("speak", "start job=%s model=%s source=%s url=%s",
          job_id, cfg["tts_model"], source, url)
     try:
-        source_map = {
-            "transcript": "transcript.txt",
-            "summary": "summary.txt",
-            "counterargue": "counterargue.txt",
-        }
-        if source.startswith("translation-") or source.startswith("summary-"):
-            source_file = source + ".txt" if not source.endswith(".txt") else source
-        else:
-            source_file = source_map.get(source)
+        source_file = _speak_source_filename(source)
         if not source_file:
             raise RuntimeError(f"Unknown source: {source}")
 
@@ -1547,15 +1559,7 @@ def speak_endpoint():
     else:
         ref_path, _ = _resolve_voice_reference(url)
         cache_key_voice = ref_path
-    source_map = {
-        "transcript": "transcript.txt",
-        "summary": "summary.txt",
-        "counterargue": "counterargue.txt",
-    }
-    if source.startswith("translation-") or source.startswith("summary-"):
-        source_file = source + ".txt" if not source.endswith(".txt") else source
-    else:
-        source_file = source_map.get(source, source + ".txt")
+    source_file = _speak_source_filename(source) or (source + ".txt")
 
     text = cache.read_text(url, source_file)
     if text:
@@ -1595,15 +1599,7 @@ def speak_download():
     else:
         ref_path, _ = _resolve_voice_reference(url)
         cache_key_voice = ref_path
-    source_map = {
-        "transcript": "transcript.txt",
-        "summary": "summary.txt",
-        "counterargue": "counterargue.txt",
-    }
-    if source.startswith("translation-") or source.startswith("summary-"):
-        source_file = source + ".txt" if not source.endswith(".txt") else source
-    else:
-        source_file = source_map.get(source, source + ".txt")
+    source_file = _speak_source_filename(source) or (source + ".txt")
 
     text = cache.read_text(url, source_file)
     if not text:

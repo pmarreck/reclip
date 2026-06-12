@@ -58,7 +58,14 @@ def _builtin_actions():
 			system_prompt=DEFAULT_SUMMARIZE_PROMPT, params=[],
 		),
 		Action(
-			id="translate", name="Translate", source="summarize",
+			id="translate", name="Translate Summary", source="summarize",
+			system_prompt=DEFAULT_TRANSLATE_PROMPT,
+			params=[ActionParam(
+				name="language", type="string", required=True, label="Language",
+			)],
+		),
+		Action(
+			id="translate_transcript", name="Translate Transcript", source=SOURCE_TRANSCRIPT,
 			system_prompt=DEFAULT_TRANSLATE_PROMPT,
 			params=[ActionParam(
 				name="language", type="string", required=True, label="Language",

@@ -1275,7 +1275,7 @@ class TestActionsAPI:
         translate = next(a for a in data["actions"] if a["id"] == "translate")
         assert translate["params"][0]["name"] == "language"
         assert translate["params"][0]["required"] is True
-        assert "name" in translate and translate["name"] == "Translate"
+        assert "name" in translate and translate["name"] == "Translate Summary"
         # last_error surfaces config problems to the UI (None when healthy)
         assert "last_error" in data
 
@@ -1339,3 +1339,41 @@ class TestActionsAPI:
         resp = client.post("/api/action/translate", json={"url": self.URL})
         assert resp.status_code == 400
         assert "language" in resp.get_json()["error"]
+
+
+class TestSpeakSourceFilename:
+    """_speak_source_filename: one shared mapping from a speak 'source' token
+    to its cache filename (was duplicated in two routes)."""
+
+    def test_builtin_sources(self):
+        import app
+        assert app._speak_source_filename("transcript") == "transcript.txt"
+        assert app._speak_source_filename("summary") == "summary.txt"
+        assert app._speak_source_filename("counterargue") == "counterargue.txt"
+
+    def test_diarized_source(self):
+        import app
+        assert app._speak_source_filename("diarized") == "transcript_diarized.txt"
+
+    def test_translation_prefixes(self):
+        import app
+        assert app._speak_source_filename("translation-spanish") == "translation-spanish.txt"
+        assert app._speak_source_filename("summary-german") == "summary-german.txt"
+
+    def test_custom_action_outputs(self):
+        import app
+        assert app._speak_source_filename("action-tldr") == "action-tldr.txt"
+
+    def test_unknown_returns_none(self):
+        import app
+        assert app._speak_source_filename("etc-passwd") is None
+        assert app._speak_source_filename("../sneaky") is None
+
+
+class TestIndexRoute:
+    def test_index_renders(self, client):
+        """The UI itself — a missing route decorator once turned / into a 404
+        while every API test stayed green. Never again."""
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert b"<title>" in resp.data
