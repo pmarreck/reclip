@@ -19,7 +19,7 @@ LINUX_UNIT_NAME = "reclip.service"
 # ORT_DYLIB_PATH lets diarization's cpu/cuda modes dlopen ONNX Runtime
 # (RECLIP_SPEAKRS_LIB itself is covered by the RECLIP_ prefix).
 ENV_ALLOWLIST_PREFIXES = ("RECLIP_",)
-ENV_ALLOWLIST_EXACT = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "ORT_DYLIB_PATH")
+ENV_ALLOWLIST_EXACT = ("PATH", "HOME", "LANG", "LC_ALL", "XDG_CACHE_HOME", "XDG_CONFIG_HOME", "ORT_DYLIB_PATH", "HOST")
 
 
 def detect_platform():
@@ -46,8 +46,11 @@ def _captured_env():
 	for k, v in os.environ.items():
 		if k in ENV_ALLOWLIST_EXACT or any(k.startswith(p) for p in ENV_ALLOWLIST_PREFIXES):
 			env[k] = v
-	# Ensure HOST defaults to loopback for safety
-	env.setdefault("HOST", "127.0.0.1")
+	# NOTE: do NOT inject HOST here. app.py lets the HOST env var override
+	# config.ini's RECLIP_HOST, so baking a loopback default silently pinned
+	# the service to 127.0.0.1 regardless of configuration. The loopback
+	# safety default already lives in config.py. An explicit HOST present in
+	# the install shell is still captured below (intentional override).
 	# Marker so the spawned process can tell it's running under a supervisor.
 	env["RECLIP_RUNNING_AS_SERVICE"] = "1"
 	return env

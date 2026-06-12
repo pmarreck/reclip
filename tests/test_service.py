@@ -55,11 +55,13 @@ class TestCapturedEnv:
 		env = _captured_env()
 		assert "SOMETHING_UNRELATED" not in env
 
-	def test_defaults_host_to_loopback(self, monkeypatch):
+	def test_does_not_inject_host(self, monkeypatch):
+		"""Superseded contract: this test used to assert HOST=127.0.0.1 was
+		baked in — which silently overrode RECLIP_HOST under launchd (app.py
+		gives the HOST env var precedence). See TestHostNotBaked."""
 		monkeypatch.delenv("HOST", raising=False)
 		from service import _captured_env
-		env = _captured_env()
-		assert env.get("HOST") == "127.0.0.1"
+		assert "HOST" not in _captured_env()
 
 
 class TestPlistGeneration:
@@ -249,3 +251,23 @@ class TestOrtDylibPathCaptured:
 		monkeypatch.setenv("ORT_DYLIB_PATH", "/nix/store/x/libonnxruntime.dylib")
 		env = _captured_env()
 		assert env.get("ORT_DYLIB_PATH") == "/nix/store/x/libonnxruntime.dylib"
+
+
+class TestHostNotBaked:
+	def test_captured_env_does_not_inject_host(self, monkeypatch):
+		"""Baking HOST=127.0.0.1 into the service file silently overrode
+		config.ini's RECLIP_HOST (app.py lets the HOST env var win), pinning
+		the service to loopback no matter what the user configured. The
+		loopback safety default already lives in config.py — the service must
+		not inject its own."""
+		monkeypatch.delenv("HOST", raising=False)
+		from service import _captured_env
+		env = _captured_env()
+		assert "HOST" not in env
+
+	def test_explicit_host_env_still_captured(self, monkeypatch):
+		"""An ad-hoc HOST override present at install time is intentional."""
+		monkeypatch.setenv("HOST", "0.0.0.0")
+		from service import _captured_env
+		env = _captured_env()
+		assert env.get("HOST") == "0.0.0.0"
