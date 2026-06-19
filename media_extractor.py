@@ -17,6 +17,7 @@ from urllib.parse import urlparse
 IMAGE_HOSTS = frozenset({
 	"instagram.com",
 	"threads.net",
+	"threads.com",
 	"reddit.com",
 	"redd.it",
 	"x.com",
@@ -149,6 +150,35 @@ _LOGIN_REDIRECT_PATTERNS = (
 )
 
 
+_UNSUPPORTED_HOSTS = {
+	"threads.net": (
+		"Threads has no gallery-dl or yt-dlp extractor yet (June 2026) — Meta "
+		"serves the post media only to authenticated GraphQL requests, which "
+		"neither tool implements. Tracking: gallery-dl#4281, yt-dlp#10133. "
+		"Tip: if the post was cross-posted to Instagram, that link works."
+	),
+	"threads.com": (
+		"Threads has no gallery-dl or yt-dlp extractor yet (June 2026) — Meta "
+		"serves the post media only to authenticated GraphQL requests, which "
+		"neither tool implements. Tracking: gallery-dl#4281, yt-dlp#10133. "
+		"Tip: if the post was cross-posted to Instagram, that link works."
+	),
+}
+
+
+def _unsupported_hint(url, stderr):
+	"""If `stderr` is gallery-dl's 'Unsupported URL' for a host we know lacks an
+	extractor, return a clear host-specific message; otherwise None (so genuine
+	errors and supported hosts pass through unchanged)."""
+	if "unsupported url" not in (stderr or "").lower():
+		return None
+	host = _canonical_host(url)
+	for known, msg in _UNSUPPORTED_HOSTS.items():
+		if host == known or host.endswith("." + known):
+			return msg
+	return None
+
+
 def _looks_like_auth_failure(stderr):
 	low = (stderr or "").lower()
 	return any(pat in low for pat in _LOGIN_REDIRECT_PATTERNS)
@@ -191,6 +221,9 @@ def dump_images(url, runner=None, timeout=60,
 	r = runner(dump_cmd, capture_output=True, text=True, timeout=timeout)
 	if getattr(r, "returncode", 1) != 0:
 		err = (getattr(r, "stderr", "") or "").strip() or "gallery-dl --dump-json failed"
+		hint = _unsupported_hint(url, err)
+		if hint:
+			raise RuntimeError(hint)
 		if _looks_like_auth_failure(err):
 			raise RuntimeError(_augment_auth_error(err))
 		raise RuntimeError(err)
@@ -227,6 +260,9 @@ def fetch_images(url, dest_dir, runner=None, timeout=60,
 	r = runner(dump_cmd, capture_output=True, text=True, timeout=timeout)
 	if getattr(r, "returncode", 1) != 0:
 		err = (getattr(r, "stderr", "") or "").strip() or "gallery-dl --dump-json failed"
+		hint = _unsupported_hint(url, err)
+		if hint:
+			raise RuntimeError(hint)
 		if _looks_like_auth_failure(err):
 			raise RuntimeError(_augment_auth_error(err))
 		raise RuntimeError(err)

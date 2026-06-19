@@ -21,6 +21,8 @@ class TestClassifyUrl:
         "https://instagram.com/p/ABC123/",
         "https://www.threads.net/@someone/post/abc",
         "https://threads.net/@someone/post/abc",
+        "https://www.threads.com/@someone/post/abc",
+        "https://threads.com/@someone/post/abc",
         "https://www.reddit.com/r/pics/comments/abc/title/",
         "https://reddit.com/r/pics/comments/abc/title/",
         "https://old.reddit.com/r/pics/comments/abc/title/",
@@ -452,3 +454,43 @@ class TestFetchImages:
         assert "login" in msg or "auth" in msg
         # Should hint at the config knob the user needs to flip
         assert "cookie" in msg or "RECLIP_GALLERY_DL" in str(exc.value)
+
+
+class TestUnsupportedHostMessaging:
+    """Threads has no gallery-dl/yt-dlp extractor (June 2026). It must classify
+    consistently AND fail with a clear, host-specific message — not a cryptic
+    bare 'Unsupported URL'."""
+
+    def test_both_threads_domains_classify_as_images(self):
+        from media_extractor import classify_url
+        # set-level: both domains route the same so behavior is consistent
+        assert classify_url("https://www.threads.com/@a/post/x") == "images"
+        assert classify_url("https://www.threads.net/@a/post/x") == "images"
+
+    def test_unsupported_threads_dump_gives_friendly_error(self):
+        from media_extractor import dump_images
+        def fake_runner(cmd, **kw):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "[gallery-dl][error] Unsupported URL 'https://www.threads.com/@a/post/x'"
+            return R()
+        import pytest
+        with pytest.raises(RuntimeError) as ei:
+            dump_images("https://www.threads.com/@a/post/x", runner=fake_runner)
+        msg = str(ei.value)
+        assert "Threads" in msg
+        assert "extractor" in msg.lower()  # explains the real reason
+        assert "4281" in msg               # points at the tracking issue
+
+    def test_unsupported_hint_only_for_unsupported_errors(self):
+        # A non-"unsupported" error on a threads URL passes through unchanged
+        from media_extractor import _unsupported_hint
+        assert _unsupported_hint("https://www.threads.com/@a/post/x",
+                                 "some transient network error") is None
+
+    def test_unsupported_hint_none_for_supported_hosts(self):
+        from media_extractor import _unsupported_hint
+        # An "unsupported url" on a supported host (hypothetical) isn't masked
+        assert _unsupported_hint("https://www.instagram.com/p/abc/",
+                                 "Unsupported URL 'x'") is None
