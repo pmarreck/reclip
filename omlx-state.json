@@ -1,0 +1,200 @@
+{
+  "_meta": "oMLX local-only state for reclip \u2014 model overrides, installed models, app version. Regenerate with scripts/omlx_snapshot.py; secrets redacted; diff this file to see local model changes.",
+  "installed_models": [
+    {
+      "id": "Kokoro-82M-bf16"
+    },
+    {
+      "id": "Qwen3-ASR-1.7B-8bit"
+    },
+    {
+      "id": "Qwen3-TTS-12Hz-1.7B-Base-8bit"
+    },
+    {
+      "id": "Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+    },
+    {
+      "id": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
+    },
+    {
+      "id": "Voxtral-4B-TTS-2603-mlx-4bit"
+    },
+    {
+      "id": "bge-m3-mlx-fp16"
+    },
+    {
+      "id": "gemma4-heretical-mlx-8bit"
+    },
+    {
+      "id": "jina-code-embeddings-1.5b-mlx"
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3"
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3-mlx-bf16"
+    },
+    {
+      "id": "whisper-large-v3-fp16"
+    },
+    {
+      "id": "whisper-large-v3-turbo-8bit"
+    }
+  ],
+  "model_settings": {
+    "models": {
+      "gemma4-heretical-mlx-8bit": {
+        "force_sampling": false,
+        "is_default": true,
+        "is_pinned": true,
+        "specprefill_enabled": false,
+        "thinking_budget_enabled": false,
+        "turboquant_kv_bits": 8.0,
+        "turboquant_kv_enabled": true
+      },
+      "jina-code-embeddings-1.5b-mlx": {
+        "force_sampling": false,
+        "is_default": false,
+        "is_pinned": false,
+        "model_type_override": "embedding",
+        "reasoning_parser": "qwen",
+        "specprefill_enabled": false,
+        "thinking_budget_enabled": false,
+        "turboquant_kv_bits": 4.0,
+        "turboquant_kv_enabled": false
+      },
+      "parakeet-tdt-0.6b-v3": {
+        "force_sampling": false,
+        "is_default": false,
+        "is_pinned": false,
+        "model_type_override": "audio_stt",
+        "reasoning_parser": "qwen",
+        "specprefill_enabled": false,
+        "thinking_budget_enabled": false,
+        "turboquant_kv_bits": 4.0,
+        "turboquant_kv_enabled": false
+      },
+      "parakeet-tdt-0.6b-v3-mlx-bf16": {
+        "force_sampling": false,
+        "is_default": false,
+        "is_pinned": false,
+        "model_type_override": "audio_stt",
+        "reasoning_parser": "qwen",
+        "specprefill_enabled": false,
+        "thinking_budget_enabled": false,
+        "turboquant_kv_bits": 4.0,
+        "turboquant_kv_enabled": false
+      },
+      "whisper-large-v3-mlx": {
+        "force_sampling": false,
+        "is_default": false,
+        "is_pinned": false,
+        "model_type_override": "audio_stt",
+        "reasoning_parser": "qwen",
+        "specprefill_enabled": false,
+        "thinking_budget_enabled": false,
+        "turboquant_kv_bits": 4.0,
+        "turboquant_kv_enabled": false
+      }
+    },
+    "version": 1
+  },
+  "omlx_version": "0.3.8rc1",
+  "schema": 1,
+  "settings_redacted": {
+    "auth": {
+      "api_key": "<redacted>",
+      "secret_key": "<redacted>",
+      "skip_api_key_verification": false,
+      "sub_keys": "<redacted>"
+    },
+    "cache": {
+      "enabled": true,
+      "hot_cache_max_size": "12GB",
+      "hot_cache_only": false,
+      "initial_cache_blocks": 256,
+      "ssd_cache_dir": "/Users/pmarreck/.omlx/cache",
+      "ssd_cache_max_size": "744GB"
+    },
+    "claude_code": {
+      "context_scaling_enabled": true,
+      "haiku_model": null,
+      "mode": "cloud",
+      "opus_model": null,
+      "sonnet_model": null,
+      "target_context_size": 75000
+    },
+    "huggingface": {
+      "endpoint": ""
+    },
+    "idle_timeout": {
+      "idle_timeout_seconds": null
+    },
+    "integrations": {
+      "codex_model": "gemma4-heretical-mlx-8bit",
+      "openclaw_model": "gemma4-heretical-mlx-8bit",
+      "openclaw_tools_profile": "coding",
+      "opencode_model": "gemma4-heretical-mlx-8bit",
+      "pi_model": "gemma4-heretical-mlx-8bit"
+    },
+    "logging": {
+      "log_dir": null,
+      "retention_days": 7
+    },
+    "mcp": {
+      "config_path": null
+    },
+    "memory": {
+      "max_process_memory": "108GB",
+      "prefill_memory_guard": true
+    },
+    "model": {
+      "max_model_memory": "108GB",
+      "model_dir": "/Users/pmarreck/.omlx/models",
+      "model_dirs": [
+        "/Users/pmarreck/.omlx/models"
+      ],
+      "model_fallback": false
+    },
+    "modelscope": {
+      "endpoint": ""
+    },
+    "network": {
+      "ca_bundle": "",
+      "http_proxy": "",
+      "https_proxy": "",
+      "no_proxy": ""
+    },
+    "sampling": {
+      "max_context_window": 70000,
+      "max_tokens": 16384,
+      "repetition_penalty": 1.0,
+      "temperature": 1.0,
+      "top_k": 0,
+      "top_p": 0.95
+    },
+    "scheduler": {
+      "max_concurrent_requests": 8
+    },
+    "server": {
+      "cors_origins": [
+        "*"
+      ],
+      "host": "0.0.0.0",
+      "log_level": "info",
+      "port": 8000,
+      "server_aliases": [
+        "localhost",
+        "127.0.0.1",
+        "PeterMacbookProM4Max",
+        "PeterMacbookProM4Max.local",
+        "192.168.1.97",
+        "100.124.125.15"
+      ]
+    },
+    "ui": {
+      "language": "en"
+    },
+    "version": "1.0"
+  }
+}
