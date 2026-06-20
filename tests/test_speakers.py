@@ -100,6 +100,24 @@ class TestFormatDiarized:
 		out = format_diarized(merged)
 		assert "Unknown:" in out
 
+	def test_blank_line_between_speaker_blocks(self):
+		"""On speaker switch, blocks are separated by a blank line (a newline
+		after each block), not just stacked on consecutive lines — readability."""
+		from speakers import format_diarized
+		out = format_diarized(self.MERGED)
+		blocks = out.split("\n\n")
+		assert len(blocks) == 3  # SPEAKER_07, SPEAKER_02, SPEAKER_07
+		assert all(b.strip() and "\n" not in b for b in blocks)
+		# each block is one "Label: text" line, no empty blocks
+		assert blocks[0].startswith("Speaker 1:")
+		assert blocks[1].startswith("Speaker 2:")
+
+	def test_single_block_has_no_trailing_blank(self):
+		from speakers import format_diarized
+		merged = [{"start": 0, "end": 1, "text": "solo", "speaker": "S0"}]
+		out = format_diarized(merged)
+		assert out == "Speaker 1: solo"  # no trailing newline for a lone block
+
 
 class TestSpeakerLabelMap:
 	def test_labels_match_format_numbering(self):

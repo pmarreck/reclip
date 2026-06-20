@@ -132,7 +132,8 @@ def format_diarized(merged, names=None):
 			cur_texts = [m["text"].strip()]
 	if cur_texts:
 		lines.append(f"{label_for(cur_speaker)}: {' '.join(cur_texts)}")
-	return "\n".join(lines)
+	# Blank line between speaker blocks (newline after each block on switch).
+	return "\n\n".join(lines)
 
 
 NAMING_SYSTEM_PROMPT = (
