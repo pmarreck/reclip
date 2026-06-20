@@ -30,40 +30,51 @@ sandbox with neither. The pure redaction/build logic *is* unit-tested in
 `tests/test_omlx_snapshot.py`.) Secrets (`api_key`, `secret_key`, `sub_keys`)
 are redacted before writing — verified by a serialize-and-scan test.
 
-## Active local changes
+## Current state — oMLX 0.4.4
 
-### 1. Parakeet STT model-type override  (added 2026-06-20)
-- **What:** `~/.omlx/model_settings.json` gives `parakeet-tdt-0.6b-v3` and
-  `parakeet-tdt-0.6b-v3-mlx-bf16` `"model_type_override": "audio_stt"`.
-- **Why:** oMLX **0.3.8rc1** mis-discovers Parakeet as `type: llm, engine:
-  batched`, so transcription 500s with `KeyError: 'model_type'`. The override
-  forces it onto the STT engine (same mechanism oMLX uses for
-  `whisper-large-v3-mlx` and `jina-code-embeddings`).
-- **Status / caveat:** overrides apply only at oMLX **model-pool discovery**
-  (startup), so an oMLX **restart** is required to take effect. Even then, if
-  0.3.8's bundled mlx-audio lacks a Parakeet STT loader the override fixes
-  routing but not capability — updating oMLX to ≥0.4.x is the durable fix.
-- **Revert:** delete those two entries from `model_settings.json` (timestamped
-  backups: `~/.omlx/model_settings.json.bak.*`).
-- **Verify:** `curl -F file=@clip.wav -F model=parakeet-tdt-0.6b-v3 …
-  /v1/audio/transcriptions` returns text, not a `'model_type'` error.
+Updated 0.3.8rc1 → **0.4.4** on 2026-06-20. The update resolved everything
+that was previously patched/overridden locally:
 
-### 2. oMLX WhisperProcessor patch  (superseded — now upstream)
-- **What:** `scripts/fix-omlx-stt.sh` patched a locally-installed oMLX so its
-  bundled transformers could build `WhisperProcessor` (mistral_common <1.10 vs
-  transformers 5.x mismatch). Applied to the **0.3.8rc1** install.
-- **Status:** **superseded.** Our fix was upstreamed as
-  [jundot/omlx#1116](https://github.com/jundot/omlx/pull/1116) (**merged
-  2026-05-09**, native in releases after that incl. 0.4.x). Updating oMLX makes
-  the local patch redundant — the script stays for reference / older installs.
+- **WhisperProcessor patch — superseded.** `scripts/fix-omlx-stt.sh` (the
+  mistral_common<1.10 fix) is now redundant: our fix was upstreamed as
+  [jundot/omlx#1116](https://github.com/jundot/omlx/pull/1116) (merged
+  2026-05-09, native in 0.4.4). Script kept for reference / older installs.
+- **Parakeet model-type override — removed.** 0.4.4 natively discovers
+  `parakeet-tdt-0.6b-v3*` as `audio_stt`, so the override we briefly added on
+  0.3.8rc1 (which mis-discovered them as `llm/batched`) is no longer needed.
+  `~/.omlx/model_settings.json` is back to its original 3 entries
+  (whisper-large-v3-mlx, jina, gemma4). Backups: `model_settings.json.bak.*`.
+
+## STT decision (evidence-based)
+
+On 0.4.4, `word_timestamps=true` finally **populates** — and that picked the
+winner. Measured on a 90s multi-speaker clip:
+
+| STT model | segments | words | use |
+|---|---|---|---|
+| **whisper-large-v3-fp16** | 29 | **295** | ✅ chosen — word-level diarization now works |
+| Qwen3-ASR-1.7B-8bit | 1 | 0 | better punctuation, but one blob (no attribution) |
+| parakeet-tdt-0.6b-v3 | 0 | 0 | oMLX exposes no timestamps for it → useless here |
+
+**`whisper-large-v3-fp16` is the STT** (already the `RECLIP_STT_MODEL` default).
+Its word timestamps make the word-level diarization merge (in `speakers.py`,
+inert until this oMLX update) finally active.
+
+**Known upstream gap (optional PR target):** Parakeet natively produces
+word/char/segment timestamps, but oMLX's STT engine returns only plain text for
+it (0 segments) even on 0.4.4. Fixing that in oMLX/mlx-audio would let Parakeet
+(smaller, faster, English) replace Whisper — not needed now that Whisper works.
 
 ## Models reclip depends on (referenced in ~/.config/reclip+/config.ini)
-- **STT** (`RECLIP_STT_MODEL`): `whisper-large-v3-fp16` (current default).
-  Candidates under evaluation: `Qwen3-ASR-1.7B-8bit` (best text, 1 segment —
-  bad for diarization), `parakeet-tdt-0.6b-v3` (word timestamps — blocked on
-  the override above).
+- **STT** (`RECLIP_STT_MODEL`): `whisper-large-v3-fp16`.
 - **LLM** (`RECLIP_SUMMARIZE_MODEL` etc.): `gemma4-heretical-mlx-8bit`.
 - **TTS** (`RECLIP_TTS_MODEL`): `Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit`.
 
-If a referenced model isn't served by oMLX, the corresponding feature 500s with
-an auth/“model not found” error — check `omlx-state.json`'s `installed_models`.
+**Whisper is the only STT kept.** Removed 2026-06-20 (moved to `~/.Trash/`,
+recoverable; ~6 GB reclaimed): both Parakeet variants (oMLX exposes no
+timestamps for them) and `Qwen3-ASR-1.7B-8bit` (one-blob segments, no word
+timestamps). Qwen3-ASR lingers in `omlx-state.json`'s `installed_models` until
+the next oMLX restart refreshes its registry (disk already cleared).
+
+If a referenced model isn't served by oMLX, that feature 500s with an
+auth/“model not found” error — check `omlx-state.json`'s `installed_models`.

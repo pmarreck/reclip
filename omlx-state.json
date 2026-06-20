@@ -17,6 +17,9 @@
       "id": "Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit"
     },
     {
+      "id": "TheCluster--amoral-gemma-3-12B-v2-mlx-4bit"
+    },
+    {
       "id": "Voxtral-4B-TTS-2603-mlx-4bit"
     },
     {
@@ -29,10 +32,10 @@
       "id": "jina-code-embeddings-1.5b-mlx"
     },
     {
-      "id": "parakeet-tdt-0.6b-v3"
+      "id": "mlx-community--gemma-3-12b-it-bf16"
     },
     {
-      "id": "parakeet-tdt-0.6b-v3-mlx-bf16"
+      "id": "notapalindrome--ltx2-mlx-av"
     },
     {
       "id": "whisper-large-v3-fp16"
@@ -63,28 +66,6 @@
         "turboquant_kv_bits": 4.0,
         "turboquant_kv_enabled": false
       },
-      "parakeet-tdt-0.6b-v3": {
-        "force_sampling": false,
-        "is_default": false,
-        "is_pinned": false,
-        "model_type_override": "audio_stt",
-        "reasoning_parser": "qwen",
-        "specprefill_enabled": false,
-        "thinking_budget_enabled": false,
-        "turboquant_kv_bits": 4.0,
-        "turboquant_kv_enabled": false
-      },
-      "parakeet-tdt-0.6b-v3-mlx-bf16": {
-        "force_sampling": false,
-        "is_default": false,
-        "is_pinned": false,
-        "model_type_override": "audio_stt",
-        "reasoning_parser": "qwen",
-        "specprefill_enabled": false,
-        "thinking_budget_enabled": false,
-        "turboquant_kv_bits": 4.0,
-        "turboquant_kv_enabled": false
-      },
       "whisper-large-v3-mlx": {
         "force_sampling": false,
         "is_default": false,
@@ -99,7 +80,7 @@
     },
     "version": 1
   },
-  "omlx_version": "0.3.8rc1",
+  "omlx_version": "0.4.4",
   "schema": 1,
   "settings_redacted": {
     "auth": {
@@ -125,13 +106,21 @@
       "target_context_size": 75000
     },
     "huggingface": {
-      "endpoint": ""
+      "endpoint": "",
+      "hf_cache_enabled": true
     },
     "idle_timeout": {
       "idle_timeout_seconds": null
     },
     "integrations": {
       "codex_model": "gemma4-heretical-mlx-8bit",
+      "copilot_model": null,
+      "hermes_model": null,
+      "markitdown_enabled": true,
+      "markitdown_expose_model": false,
+      "markitdown_max_file_size_mb": 25,
+      "markitdown_max_files_per_request": 5,
+      "markitdown_pdf_processing_engine": "markitdown",
       "openclaw_model": "gemma4-heretical-mlx-8bit",
       "openclaw_tools_profile": "coding",
       "opencode_model": "gemma4-heretical-mlx-8bit",
@@ -145,11 +134,15 @@
       "config_path": null
     },
     "memory": {
-      "max_process_memory": "108GB",
-      "prefill_memory_guard": true
+      "hard_threshold": 0.95,
+      "memory_guard_custom_ceiling_gb": 0.0,
+      "memory_guard_tier": "balanced",
+      "prefill_memory_guard": true,
+      "prefill_min_chunk_tokens": 32,
+      "prefill_safe_zone_ratio": 0.8,
+      "soft_threshold": 0.85
     },
     "model": {
-      "max_model_memory": "108GB",
       "model_dir": "/Users/pmarreck/.omlx/models",
       "model_dirs": [
         "/Users/pmarreck/.omlx/models"
@@ -167,6 +160,7 @@
     },
     "sampling": {
       "max_context_window": 70000,
+      "max_context_window_policy": null,
       "max_tokens": 16384,
       "repetition_penalty": 1.0,
       "temperature": 1.0,
@@ -174,15 +168,20 @@
       "top_p": 0.95
     },
     "scheduler": {
+      "chunked_prefill": false,
+      "embedding_batch_size": 32,
       "max_concurrent_requests": 8
     },
     "server": {
+      "auto_start_on_launch": true,
+      "burst_decode_mode": "balanced",
       "cors_origins": [
         "*"
       ],
       "host": "0.0.0.0",
       "log_level": "info",
       "port": 8000,
+      "preserve_mid_system_cache": true,
       "server_aliases": [
         "localhost",
         "127.0.0.1",
@@ -190,7 +189,8 @@
         "PeterMacbookProM4Max.local",
         "192.168.1.97",
         "100.124.125.15"
-      ]
+      ],
+      "sse_keepalive_mode": "chunk"
     },
     "ui": {
       "language": "en"
