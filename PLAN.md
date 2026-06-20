@@ -27,3 +27,11 @@
 - TTS voice quality unsatisfying with current Qwen3-TTS VoiceDesign — revisit
   model options later (Listen-from-action idea also deferred)
 - jj is now colocated in this repo (was plain git); main branch is `main`
+
+- [x] word_timestamps + sentence-aware merge (2026-06-20): oMLX 0.4.4 emits
+      word timestamps; merge assigns one speaker per SENTENCE (majority overlap),
+      changing speaker only at sentence boundaries — kills mid-utterance
+      fragmentation. data-centers re-render: 78 clean blocks vs 109 shredded.
+- [ ] (future) sentence-aware refinements: abbreviation handling (don't split on
+      "Inc." / "U.S."); sentences that span Whisper segments; Peter's idea of an
+      explicit mid-sentence-split detector to weight the heuristic further.

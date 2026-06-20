@@ -190,53 +190,142 @@ class TestNaming:
 		assert display == {}
 
 
-class TestWordLevelMerge:
-	"""When transcript segments carry word-level timestamps (oMLX
-	word_timestamps extension), merge_speakers must split a segment at
-	word-granularity speaker boundaries instead of all-or-nothing."""
+class TestSentenceSpans:
+	"""_sentence_spans groups word indices into sentences via terminal
+	punctuation in the word tokens — the unit at which speakers may change."""
 
-	def test_segment_split_at_word_boundary(self):
+	def _w(self, *toks):
+		return [{"word": " " + t, "start": float(i), "end": float(i) + 0.5}
+		        for i, t in enumerate(toks)]
+
+	def test_splits_on_period(self):
+		from speakers import _sentence_spans
+		words = self._w("Hello", "there.", "How", "are", "you?")
+		assert _sentence_spans(words) == [(0, 2), (2, 5)]
+
+	def test_question_and_exclaim(self):
+		from speakers import _sentence_spans
+		words = self._w("Stop!", "Why?", "Okay")
+		assert _sentence_spans(words) == [(0, 1), (1, 2), (2, 3)]
+
+	def test_no_terminal_punctuation_one_sentence(self):
+		from speakers import _sentence_spans
+		words = self._w("just", "a", "fragment")
+		assert _sentence_spans(words) == [(0, 3)]
+
+	def test_trailing_quote_after_period(self):
+		from speakers import _sentence_spans
+		words = self._w('"Done."', "Next")
+		assert _sentence_spans(words) == [(0, 1), (1, 2)]
+
+
+class TestWordLevelMerge:
+	"""Approach A (sentence-aware): each sentence is assigned to one speaker by
+	majority word-overlap, and the speaker may change only at a sentence
+	boundary. Mid-sentence boundary noise from speakrs/Whisper misalignment
+	cannot fragment a sentence. Genuine short turns survive because they're
+	their own Whisper segment (and usually their own sentence)."""
+
+	def test_blip_does_not_fragment_sentence(self):
+		"""Reported bug: leading words land on a wrong speaker due to a tiny
+		speakrs turn at the segment start. The sentence resolves to its majority,
+		one block — no fragmentation."""
 		from speakers import merge_speakers
-		# One STT segment containing speech from two speakers
 		transcript = [{
-			"start": 0.0, "end": 8.0, "text": "How are you? I'm fine.",
+			"start": 0.0, "end": 6.0, "text": "Okay so today we are driving south.",
 			"words": [
-				{"word": " How", "start": 0.0, "end": 0.5},
-				{"word": " are", "start": 0.5, "end": 1.0},
-				{"word": " you?", "start": 1.0, "end": 1.6},
-				{"word": " I'm", "start": 4.2, "end": 4.6},
-				{"word": " fine.", "start": 4.6, "end": 5.2},
+				{"word": " Okay", "start": 0.0, "end": 0.3},
+				{"word": " so", "start": 0.3, "end": 0.5},
+				{"word": " today", "start": 0.5, "end": 0.9},
+				{"word": " we", "start": 0.9, "end": 1.1},
+				{"word": " are", "start": 1.3, "end": 1.5},
+				{"word": " driving", "start": 1.6, "end": 2.0},
+				{"word": " south.", "start": 2.1, "end": 2.6},
+			],
+		}]
+		turns = [
+			{"start": 0.0, "end": 0.6, "speaker": "SPEAKER_05"},
+			{"start": 0.6, "end": 6.0, "speaker": "SPEAKER_04"},
+		]
+		merged = merge_speakers(transcript, turns)
+		assert len(merged) == 1
+		assert merged[0]["speaker"] == "SPEAKER_04"
+		assert merged[0]["text"] == "Okay so today we are driving south."
+
+	def test_speaker_changes_at_sentence_boundary(self):
+		"""Two sentences in one Whisper segment, each a different speaker → split
+		AT the sentence boundary, exactly two blocks."""
+		from speakers import merge_speakers
+		transcript = [{
+			"start": 0.0, "end": 10.0, "text": "How large is it? It is huge.",
+			"words": [
+				{"word": " How", "start": 0.0, "end": 0.4},
+				{"word": " large", "start": 0.4, "end": 0.9},
+				{"word": " is", "start": 0.9, "end": 1.1},
+				{"word": " it?", "start": 1.1, "end": 1.5},
+				{"word": " It", "start": 5.0, "end": 5.2},
+				{"word": " is", "start": 5.2, "end": 5.4},
+				{"word": " huge.", "start": 5.4, "end": 5.9},
 			],
 		}]
 		turns = [
 			{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"},
-			{"start": 4.0, "end": 8.0, "speaker": "SPEAKER_01"},
+			{"start": 4.5, "end": 10.0, "speaker": "SPEAKER_01"},
 		]
 		merged = merge_speakers(transcript, turns)
-		assert len(merged) == 2
-		assert merged[0]["speaker"] == "SPEAKER_00"
-		assert merged[0]["text"] == "How are you?"
-		assert merged[1]["speaker"] == "SPEAKER_01"
-		assert merged[1]["text"] == "I'm fine."
-		# sub-segment timing comes from the words
-		assert merged[0]["start"] == 0.0 and merged[0]["end"] == 1.6
-		assert merged[1]["start"] == 4.2 and merged[1]["end"] == 5.2
+		assert [m["speaker"] for m in merged] == ["SPEAKER_00", "SPEAKER_01"]
+		assert merged[0]["text"] == "How large is it?"
+		assert merged[1]["text"] == "It is huge."
 
-	def test_unmatched_words_inherit_previous_speaker(self):
+	def test_midsentence_speaker_noise_ignored(self):
+		"""A word mid-sentence overlapping a different turn does NOT split the
+		sentence — the whole sentence takes the majority speaker."""
 		from speakers import merge_speakers
 		transcript = [{
-			"start": 0.0, "end": 5.0, "text": "Hello um world",
+			"start": 0.0, "end": 5.0, "text": "I am heading to the data center today.",
 			"words": [
-				{"word": " Hello", "start": 0.0, "end": 0.5},
-				{"word": " um", "start": 2.5, "end": 2.7},   # in a turn gap
-				{"word": " world", "start": 0.6, "end": 1.0},
+				{"word": " I", "start": 0.0, "end": 0.2},
+				{"word": " am", "start": 0.2, "end": 0.4},
+				{"word": " heading", "start": 0.4, "end": 0.9},
+				{"word": " to", "start": 2.0, "end": 2.2},   # blip overlaps SPEAKER_09
+				{"word": " the", "start": 2.4, "end": 2.6},
+				{"word": " data", "start": 2.6, "end": 3.0},
+				{"word": " center", "start": 3.0, "end": 3.5},
+				{"word": " today.", "start": 3.5, "end": 4.0},
 			],
 		}]
-		turns = [{"start": 0.0, "end": 2.0, "speaker": "SPEAKER_00"}]
+		turns = [
+			{"start": 0.0, "end": 2.05, "speaker": "SPEAKER_04"},
+			{"start": 2.05, "end": 2.25, "speaker": "SPEAKER_09"},  # 1-word blip
+			{"start": 2.25, "end": 5.0, "speaker": "SPEAKER_04"},
+		]
 		merged = merge_speakers(transcript, turns)
 		assert len(merged) == 1
-		assert merged[0]["speaker"] == "SPEAKER_00"
-		assert merged[0]["text"] == "Hello um world"
+		assert merged[0]["speaker"] == "SPEAKER_04"
+
+	def test_short_real_turn_in_own_segment_preserved(self):
+		from speakers import merge_speakers
+		transcript = [
+			{"start": 0.0, "end": 4.0, "text": "How large are we talking about here?",
+			 "words": [{"word": " How", "start": 0.0, "end": 0.4},
+			           {"word": " large", "start": 0.4, "end": 0.9},
+			           {"word": " are", "start": 0.9, "end": 1.1},
+			           {"word": " we", "start": 1.1, "end": 1.3},
+			           {"word": " talking", "start": 1.3, "end": 1.8},
+			           {"word": " about", "start": 1.8, "end": 2.2},
+			           {"word": " here?", "start": 2.2, "end": 2.6}]},
+			{"start": 5.0, "end": 6.0, "text": "It is huge.",
+			 "words": [{"word": " It", "start": 5.0, "end": 5.2},
+			           {"word": " is", "start": 5.2, "end": 5.4},
+			           {"word": " huge.", "start": 5.4, "end": 5.9}]},
+		]
+		turns = [
+			{"start": 0.0, "end": 4.5, "speaker": "SPEAKER_00"},
+			{"start": 4.8, "end": 6.0, "speaker": "SPEAKER_01"},
+		]
+		merged = merge_speakers(transcript, turns)
+		assert [m["speaker"] for m in merged] == ["SPEAKER_00", "SPEAKER_01"]
+		assert merged[1]["text"] == "It is huge."
 
 	def test_segments_without_words_fall_back_to_segment_level(self):
 		from speakers import merge_speakers
@@ -256,14 +345,15 @@ class TestWordLevelMerge:
 	def test_all_words_unmatched_yields_none_speaker(self):
 		from speakers import merge_speakers
 		transcript = [{
-			"start": 0.0, "end": 2.0, "text": "ghost words",
+			"start": 0.0, "end": 2.0, "text": "ghost words.",
 			"words": [
 				{"word": " ghost", "start": 0.0, "end": 0.5},
-				{"word": " words", "start": 0.5, "end": 1.0},
+				{"word": " words.", "start": 0.5, "end": 1.0},
 			],
 		}]
 		turns = [{"start": 10.0, "end": 12.0, "speaker": "SPEAKER_00"}]
 		merged = merge_speakers(transcript, turns)
 		assert len(merged) == 1
 		assert merged[0]["speaker"] is None
-		assert merged[0]["text"] == "ghost words"
+		assert merged[0]["text"] == "ghost words."
+

@@ -35,41 +35,76 @@ def _speaker_for_span(start, end, speaker_turns):
 	return max(totals, key=totals.get) if totals else None
 
 
-def _merge_segment_words(seg, speaker_turns):
-	"""Word-level merge for one segment carrying a words array: assign each
-	word a speaker by overlap (words in turn gaps inherit the previous word's
-	speaker), then group consecutive same-speaker runs into sub-segments.
-	This is what lets "How are you? I'm fine." split across two speakers
-	instead of gluing the reply to the asker."""
-	runs = []
-	prev_speaker = None
-	for w in seg["words"]:
+_SENTENCE_END_RE = re.compile(r'[.!?]["\'\)\]]*$')
+
+
+def _ends_sentence(word_text):
+	"""True if this word token ends a sentence — terminal . ! ? optionally
+	followed by closing quotes/brackets. (Abbreviations are not special-cased;
+	a stray split only ever costs one extra block, never a wrong speaker.)"""
+	return bool(_SENTENCE_END_RE.search((word_text or "").strip()))
+
+
+def _sentence_spans(words):
+	"""Group word indices into sentences using terminal punctuation in the word
+	tokens. A trailing run with no terminal punctuation is its own sentence.
+	Sentences are the unit at which the speaker is allowed to change."""
+	spans = []
+	start = 0
+	for i, w in enumerate(words):
+		if _ends_sentence(w.get("word", "")):
+			spans.append((start, i + 1))
+			start = i + 1
+	if start < len(words):
+		spans.append((start, len(words)))
+	return spans
+
+
+def _majority_speaker(words, speaker_turns):
+	"""Speaker holding the greatest summed word-overlap across `words`; None if
+	no word overlaps any turn."""
+	totals = {}
+	for w in words:
 		sp = _speaker_for_span(w["start"], w["end"], speaker_turns)
-		if sp is None:
-			sp = prev_speaker
-		prev_speaker = sp
-		if runs and runs[-1]["speaker"] == sp:
-			runs[-1]["words"].append(w)
-		else:
-			runs.append({"speaker": sp, "words": [w]})
+		if sp is not None:
+			totals[sp] = totals.get(sp, 0.0) + (w["end"] - w["start"])
+	return max(totals, key=totals.get) if totals else None
+
+
+def _merge_segment_words(seg, speaker_turns):
+	"""Sentence-aware merge for a worded segment: assign each SENTENCE to one
+	speaker (majority word-overlap), then group consecutive same-speaker
+	sentences into blocks. Because the speaker can only change at a sentence
+	boundary, mid-utterance boundary noise from speakrs/Whisper misalignment
+	cannot fragment a sentence — people don't finish each other's sentences."""
+	words = seg["words"]
+	sentences = [(_majority_speaker(words[a:b], speaker_turns), a, b)
+	             for (a, b) in _sentence_spans(words)]
 	out = []
-	for run in runs:
-		text = "".join(w["word"] for w in run["words"]).strip()
+	i = 0
+	while i < len(sentences):
+		sp = sentences[i][0]
+		j = i
+		while j < len(sentences) and sentences[j][0] == sp:
+			j += 1
+		a, b = sentences[i][1], sentences[j - 1][2]
+		chunk = words[a:b]
 		out.append({
-			"start": run["words"][0]["start"],
-			"end": run["words"][-1]["end"],
-			"text": text,
-			"speaker": run["speaker"],
+			"start": chunk[0]["start"],
+			"end": chunk[-1]["end"],
+			"text": "".join(w["word"] for w in chunk).strip(),
+			"speaker": sp,
 		})
+		i = j
 	return out
 
 
 def merge_speakers(transcript_segments, speaker_turns):
 	"""Assign transcript text to speakers by temporal overlap with diarization
-	turns. Segments carrying word-level timestamps (oMLX word_timestamps
-	extension) are split at word-granularity speaker boundaries; wordless
-	segments get all-or-nothing assignment by greatest accumulated overlap.
-	Speaker is None when nothing overlaps (e.g. music, captions over silence).
+	turns. Worded segments (oMLX word_timestamps) are merged sentence-aware: the
+	speaker changes only at sentence boundaries. Wordless segments get
+	all-or-nothing assignment by greatest accumulated overlap. Speaker is None
+	when nothing overlaps (e.g. music, captions over silence).
 	"""
 	merged = []
 	for seg in transcript_segments:
