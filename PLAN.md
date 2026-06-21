@@ -32,6 +32,22 @@
       word timestamps; merge assigns one speaker per SENTENCE (majority overlap),
       changing speaker only at sentence boundaries — kills mid-utterance
       fragmentation. data-centers re-render: 78 clean blocks vs 109 shredded.
-- [ ] (future) sentence-aware refinements: abbreviation handling (don't split on
-      "Inc." / "U.S."); sentences that span Whisper segments; Peter's idea of an
-      explicit mid-sentence-split detector to weight the heuristic further.
+- [x] (2026-06-21) abbreviation handling — MEASURED, NOT NEEDED. Scanned the
+      469-segment data-centers transcript: within-segment speaker splits = 0,
+      abbreviation-induced splits = 0. Whisper segments are sentence-grained
+      (avg 9.3 words, 78% end in terminal punctuation, only 1 multi-sentence
+      segment), so the within-segment split where an abbreviation could mislead
+      essentially never fires. Ready-to-ship constant parked below if long-
+      segment content (rambling podcasts) ever shows within-segment splits.
+- [ ] (future, parked) sentences spanning Whisper segments; explicit
+      mid-sentence-split detector. Revisit only if a transcript shows nonzero
+      within-segment speaker splits (re-run the measurement in /tmp/measure_abbrev.py).
+
+  Parked ABBREVIATIONS constant (drop into speakers.py + guard in _ends_sentence
+  only if measurement turns nonzero):
+    frozenset({"mr.","mrs.","ms.","dr.","prof.","sr.","jr.","st.","rev.","hon.",
+      "gen.","sen.","rep.","gov.","lt.","sgt.","col.","capt.","inc.","corp.",
+      "ltd.","co.","llc.","dept.","e.g.","i.e.","etc.","vs.","al.","cf.","approx.",
+      "u.s.","u.k.","u.s.a.","d.c.","n.j.","n.y.","a.m.","p.m.","jan.","feb.","mar.",
+      "apr.","jun.","jul.","aug.","sep.","sept.","oct.","nov.","dec.","no.","vol."})
+    plus regex for acronyms (^([a-z]\.)+$) and single initials (^[a-z]\.$).
