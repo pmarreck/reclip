@@ -1,5 +1,36 @@
 # PLAN
 
+## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
+**GREEN. All work committed + pushed to `main` (origin). Working copy clean.**
+
+Shipped this arc (all on `main`, Garnix green):
+- **speakrs_ffi** sibling C FFI (github:pmarreck/speakrs_ffi) — the diarization engine
+- reclip: flake input, `diarizer.py` (ctypes), `speakers.py` (merge + LLM naming), `/api/diarize` + Speakers UI
+- **oMLX 0.4.4** update: Whisper word-timestamps now flow; Parakeet + Qwen3-ASR deleted (~6GB→Trash); Whisper-only STT
+- **Sentence-aware merge** — assigns one speaker per sentence; killed the word-level fragmentation (109→78 clean blocks)
+- `omlx-state.json` + `scripts/omlx_snapshot.py` + `LOCAL_ENV.md` — diffable record of out-of-repo oMLX state
+- Configurable **actions registry** (phases 0–4): `/api/action/<id>`, `~/.config/reclip+/actions.json`, legacy routes removed
+- Threads: honest "no extractor exists" handling; blank-line diarized formatting
+- Abbreviation handling: **MEASURED (0 harm), not shipped**; ready constant parked below
+
+### ⚠ Resume notes for the Thelio (CRITICAL — env changes on migration)
+- **oMLX stays on the MAC** (darwin appliance), serving `localhost:8000` there. On the Thelio (linux),
+  reclip's `RECLIP_STT_URL` / `RECLIP_SUMMARIZE_URL` / `RECLIP_TTS_URL` must be repointed from
+  `localhost:8000` → the **Mac's tailscale IP:8000** in `~/.config/reclip+/config.ini`. (Or stand up an
+  oMLX-equivalent on the Thelio.) Until then, STT/LLM/TTS 500 with connection-refused.
+- **speakrs_ffi** rebuilds fine on linux (cpu mode; ORT via `ORT_DYLIB_PATH`, both wired by the flake).
+- Config + secrets live in `~/.config/reclip+/{config.ini,secrets.ini,actions.json}` — NOT in the repo; recreate on Thelio.
+- Only the data-centers video has word-timestamped cached segments; other cached transcripts predate 0.4.4.
+
+### Next steps (when resumed on Thelio)
+1. Repoint `RECLIP_*_URL` at the Mac's oMLX over tailscale (config.ini), verify a transcribe round-trips.
+2. (optional) Re-run Speakers on a second video to get a 2nd data point for the diarization merge.
+3. Actions registry backlog: Listen-from-action; per-action model/provider + API-key config (deferred).
+4. Diarization (parked): ship the abbreviation constant ONLY if a transcript shows nonzero within-segment
+   splits — re-run the measurement logic in the "abbreviation handling" item below.
+
+---
+
 ## Configurable actions migration (phases 1–4 of 5; phase 0 done)
 - [x] Phase 0: actions.py registry + default_actions seeding + 22 tests (2026-06-05 EST)
 - [x] Phase 1: generic engine, legacy routes wrapped (2026-06-12 EST)
