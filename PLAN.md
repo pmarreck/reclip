@@ -1,5 +1,19 @@
 # PLAN
 
+## Active: YouTube extractor dependency refresh (2026-08-15)
+- [x] Reproduce current locked `yt-dlp` behavior against a live YouTube URL.
+      Completed 2026-08-15 11:32 EDT: default live clip did not reproduce 403;
+      metadata + audio download both passed, but locked `yt-dlp` warned stale.
+- [x] Refresh the Nix-pinned dependency path that provides `yt-dlp`.
+      Completed 2026-08-15 11:32 EDT: nixpkgs 2026-04-09 -> 2026-08-13,
+      `yt-dlp` 2026.03.17 -> 2026.07.04.
+- [x] Re-run live extractor checks and the fast suite.
+      Completed 2026-08-15 11:32 EDT: focused live info/audio checks passed,
+      full fast suite passed, package build passed.
+- [x] Report fork drift against `averygan/reclip`.
+      Completed 2026-08-15 11:32 EDT: fork is ahead 60 and behind 10; upstream
+      includes an auto-update `yt-dlp` launcher commit not merged here.
+
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**
 
