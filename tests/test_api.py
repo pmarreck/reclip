@@ -396,6 +396,10 @@ class TestPlaylistEndpoint:
         assert data["entries"][1]["title"] == "Video 2"
         assert data["entries"][0]["url"] == "https://youtube.com/watch?v=v1"
         assert data["entries"][1]["duration"] == 300
+        assert data["urls"] == [
+            "https://youtube.com/watch?v=v1",
+            "https://youtube.com/watch?v=v2",
+        ]
 
     def test_playlist_missing_url_returns_400(self, client):
         resp = client.post("/api/playlist", json={})

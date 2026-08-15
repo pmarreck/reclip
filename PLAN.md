@@ -13,6 +13,11 @@
 - [x] Report fork drift against `averygan/reclip`.
       Completed 2026-08-15 11:32 EDT: fork is ahead 60 and behind 10; upstream
       includes an auto-update `yt-dlp` launcher commit not merged here.
+- [x] Rebase fork work onto upstream `main`.
+      Completed 2026-08-15 15:25 EDT: rebased local `main` onto
+      `averygan/reclip` upstream with the 10 upstream commits included; resolved
+      the duplicate `/api/playlist` route by keeping the richer local response
+      while preserving upstream's `urls` compatibility field.
 
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**
@@ -71,7 +76,7 @@ Shipped this arc (all on `main`, Garnix green):
 ## Notes
 - TTS voice quality unsatisfying with current Qwen3-TTS VoiceDesign — revisit
   model options later (Listen-from-action idea also deferred)
-- jj is now colocated in this repo (was plain git); main branch is `main`
+- Source control is direct `git`; main branch is `main`
 
 - [x] word_timestamps + sentence-aware merge (2026-06-20): oMLX 0.4.4 emits
       word timestamps; merge assigns one speaker per SENTENCE (majority overlap),
