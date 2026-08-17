@@ -1,6 +1,6 @@
 # PLAN
 
-## Active: YouTube extractor dependency refresh (2026-08-15)
+## Active: Transcription reliability + summary copy (2026-08-17)
 - [x] Reproduce current locked `yt-dlp` behavior against a live YouTube URL.
       Completed 2026-08-15 11:32 EDT: default live clip did not reproduce 403;
       metadata + audio download both passed, but locked `yt-dlp` warned stale.
@@ -24,6 +24,32 @@
       video merge path succeeded; MP3 generation now downloads the working
       `bestvideo+bestaudio/best` source, extracts MP3 locally with ffmpeg, then
       discards the temporary video source.
+- [x] Diagnose repeated-token and repeated-segment transcription failure before
+      adding any output cleanup.
+      Completed 2026-08-17 10:37 EDT: cached `KwOUnk9tjUM` segment diagnostics
+      identify a pathological `test` segment (compression ratio 21.33) and a
+      repeated phrase loop with mean word probabilities 0.11-0.14; source audio
+      is non-silent after the loop begins, so this is an STT inference failure.
+- [x] Compare the installed Whisper Turbo candidate against both observed bad
+      regions, including the diarization timestamp contract.
+      Completed 2026-08-17 10:37 EDT: `whisper-large-v3-turbo-8bit` produced no
+      repeated `test` run or duplicate phrase segment, ran about 6x faster on
+      the clip tests, and returned word timestamps for all 12 sampled segments.
+- [x] Run a context-preserving longer comparison and choose the STT migration
+      strategy (Turbo default versus a non-Whisper backend); do not ship a
+      transcript cleanup heuristic as the primary fix.
+      Completed 2026-08-17 10:42 EDT: Turbo cleanly transcribed the original
+      first 480s (77 consecutive word-timestamped segments, including both
+      prior failure regions). It is now the tested/default model; Cohere is
+      deferred because it lacks timestamps and would break diarization.
+- [ ] Change the live `config.ini` override to Turbo, reinstall the LaunchAgent,
+      and verify the running service sees the new model.
+      Curiosity poke: cached transcripts remain historical output and require a
+      deliberate re-transcription rather than silent cache mutation.
+- [ ] Fix the Firefox summary Copy action with a browser-compatible clipboard
+      fallback and a corrected button-state selector.
+      Curiosity poke: clipboard permissions and secure-context rules differ by
+      browser, so success feedback must only display after a real copy succeeds.
 
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**

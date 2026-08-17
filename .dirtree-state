@@ -2,6 +2,7 @@
 ver=1.2
 annotate=[
 	actions.py = Hot-reloadable LLM action registry (actions.json): id/name/source/system_prompt/params; source chains; cycle+dup validation; last_error for UI
+	config.py = Loads ReClip settings; Turbo Whisper is the default STT for reliable word-timestamped long-form transcription.
 	diarizer.py = ctypes binding to libspeakrs_ffi (RECLIP_SPEAKRS_LIB); ffmpeg f32le decode helper
 	secrets.ini.example = Template for ~/.config/reclip+/secrets.ini — API keys for service processes that lack shell env
 	speakers.py = Pure speaker pipeline: word/segment merge vs turns, diarized formatting, LLM naming prompt/parse/confidence-gate

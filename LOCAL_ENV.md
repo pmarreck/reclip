@@ -47,18 +47,24 @@ that was previously patched/overridden locally:
 
 ## STT decision (evidence-based)
 
-On 0.4.4, `word_timestamps=true` finally **populates** — and that picked the
-winner. Measured on a 90s multi-speaker clip:
+On 0.4.4, `word_timestamps=true` finally **populates**. The initial 90s
+multi-speaker test established the timestamp requirement; a later long-form
+regression exposed repeated-token and repeated-segment failures in fp16.
 
-| STT model | segments | words | use |
+| STT model | initial timestamp test | long-form regression | use |
 |---|---|---|---|
-| **whisper-large-v3-fp16** | 29 | **295** | ✅ chosen — word-level diarization now works |
-| Qwen3-ASR-1.7B-8bit | 1 | 0 | better punctuation, but one blob (no attribution) |
-| parakeet-tdt-0.6b-v3 | 0 | 0 | oMLX exposes no timestamps for it → useless here |
+| **whisper-large-v3-turbo-8bit** | not part of initial test | 480s pass: 77 segments, all with words; no repeated `test` run, duplicate segment, or phrase loop | ✅ chosen — timestamps and long-form reliability |
+| whisper-large-v3-fp16 | 29 segments / 295 words | 15m40s regression produced repeated `test` and phrase-loop artifacts | alternate only |
+| Qwen3-ASR-1.7B-8bit | one segment, no words | not re-evaluated | better punctuation, but no attribution |
+| parakeet-tdt-0.6b-v3 | no segments or words | not re-evaluated | oMLX exposes no timestamps |
 
-**`whisper-large-v3-fp16` is the STT** (already the `RECLIP_STT_MODEL` default).
-Its word timestamps make the word-level diarization merge (in `speakers.py`,
-inert until this oMLX update) finally active.
+**`whisper-large-v3-turbo-8bit` is the STT** (the `RECLIP_STT_MODEL` default).
+Its word timestamps keep the word-level diarization merge (in `speakers.py`)
+active while avoiding the observed fp16 corruption.
+
+**Non-Whisper replacement assessment:** Cohere Transcribe is a promising
+accuracy candidate, but its current release lacks timestamps. Do not make it
+the default until ReClip has an independent alignment path for diarization.
 
 **Known upstream gap (optional PR target):** Parakeet natively produces
 word/char/segment timestamps, but oMLX's STT engine returns only plain text for
@@ -66,7 +72,7 @@ it (0 segments) even on 0.4.4. Fixing that in oMLX/mlx-audio would let Parakeet
 (smaller, faster, English) replace Whisper — not needed now that Whisper works.
 
 ## Models reclip depends on (referenced in ~/.config/reclip+/config.ini)
-- **STT** (`RECLIP_STT_MODEL`): `whisper-large-v3-fp16`.
+- **STT** (`RECLIP_STT_MODEL`): `whisper-large-v3-turbo-8bit`.
 - **LLM** (`RECLIP_SUMMARIZE_MODEL` etc.): `gemma4-heretical-mlx-8bit`.
 - **TTS** (`RECLIP_TTS_MODEL`): `Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit`.
 

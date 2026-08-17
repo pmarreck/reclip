@@ -53,19 +53,15 @@ RECLIP_GALLERY_DL_BROWSER=${RECLIP_GALLERY_DL_BROWSER}
 RECLIP_API_KEY=${RECLIP_API_KEY}
 
 # --- Speech-to-text (transcription) ---
-# whisper-large-v3-fp16 is the recommended default for oMLX Server. Other
-# tested options:
-#   whisper-large-v3-fp16          -- ~3GB, full precision, HF processor included
-#   whisper-large-v3-8bit          -- ~860MB, quantized but HF processor included
-#   whisper-large-v3-turbo-8bit    -- AVOID with current oMLX (0.3.8.dev1+):
-#                                     missing/unrecognized HuggingFace processor
-#                                     files cause "Processor not found" errors
-#                                     even after manually adding the upstream
-#                                     preprocessor_config.json/tokenizer.json.
+# whisper-large-v3-turbo-8bit is the recommended default for oMLX 0.4.4+.
+# It retains Whisper word timestamps for diarization, while the prior fp16
+# default produced repeated-token/segment failures on a long-form ReClip test.
+#   whisper-large-v3-turbo-8bit    -- ~860MB, recommended
+#   whisper-large-v3-fp16          -- ~3GB, full precision alternate
 #   whisper-large-v3-mlx (.npz)    -- AVOID: oMLX needs safetensors, not .npz
 RECLIP_STT_URL=${RECLIP_STT_URL:-http://localhost:8000/v1/audio/transcriptions}
 RECLIP_STT_API_KEY=${RECLIP_STT_API_KEY:-${RECLIP_API_KEY}}
-RECLIP_STT_MODEL=${RECLIP_STT_MODEL:-whisper-large-v3-fp16}
+RECLIP_STT_MODEL=${RECLIP_STT_MODEL:-whisper-large-v3-turbo-8bit}
 RECLIP_STT_PROMPT=${RECLIP_STT_PROMPT}
 # Word-level timestamps (oMLX extension, Whisper models only): enables
 # word-granularity speaker attribution in diarization. Default true.
@@ -342,7 +338,7 @@ class Config:
 			"gallery_dl_browser": get("RECLIP_GALLERY_DL_BROWSER", _default_browser_for_cookies()),
 			"stt_url": get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
 			"stt_api_key": get("RECLIP_STT_API_KEY"),
-			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-fp16"),
+			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-turbo-8bit"),
 			"stt_prompt": get("RECLIP_STT_PROMPT"),
 			"stt_word_timestamps": _parse_bool(get("RECLIP_STT_WORD_TIMESTAMPS"), True),
 			"stt_metadata_prompt": _parse_bool(get("RECLIP_STT_METADATA_PROMPT"), True),

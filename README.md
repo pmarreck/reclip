@@ -109,7 +109,7 @@ RECLIP_API_KEY=your_key ./run
 | `RECLIP_GALLERY_DL_COOKIES` | (empty) | Path to a Netscape-format `cookies.txt` file. Wins over `_BROWSER` when both are set. |
 | `RECLIP_STT_URL` | `http://localhost:8000/v1/audio/transcriptions` | Speech-to-text endpoint |
 | `RECLIP_STT_API_KEY` | `$RECLIP_API_KEY` | STT-specific API key |
-| `RECLIP_STT_MODEL` | `whisper-large-v3-fp16` | Whisper model name (see [STT model notes](#stt-model-notes)) |
+| `RECLIP_STT_MODEL` | `whisper-large-v3-turbo-8bit` | Whisper model name (see [STT model notes](#stt-model-notes)) |
 | `RECLIP_STT_PROMPT` | (empty) | Optional STT priming prompt |
 | `RECLIP_SUMMARIZE_URL` | `http://localhost:8000/v1/chat/completions` | Summarization endpoint |
 | `RECLIP_SUMMARIZE_API_KEY` | `$RECLIP_API_KEY` | Summarization-specific API key |
@@ -140,16 +140,19 @@ RECLIP_API_KEY=your_key ./run
 
 ### STT model notes
 
-The default `RECLIP_STT_MODEL` is `whisper-large-v3-fp16` because it ships with the HuggingFace processor/feature-extractor configuration that oMLX needs to run transcription. Other tested options on oMLX:
+The default `RECLIP_STT_MODEL` is `whisper-large-v3-turbo-8bit` on oMLX 0.4.4+.
+It retains word timestamps for diarization and passed ReClip's long-form
+regression sample without the repeated-token and repeated-segment failures that
+occurred with the former fp16 default. Other tested options on oMLX:
 
 | Model | Status | Notes |
 |-------|--------|-------|
-| `mlx-community/whisper-large-v3-fp16` | ✅ Recommended | ~3 GB, full precision, HF processor included. Default. |
+| `whisper-large-v3-turbo-8bit` | ✅ Recommended | ~860 MB; word timestamps work on oMLX 0.4.4+ and it is ReClip's default. |
+| `whisper-large-v3-fp16` | ✅ Alternate | ~3 GB, full precision. It remains selectable, but repeated-token/segment corruption was observed in ReClip's long-form regression sample. |
 | `mlx-community/whisper-large-v3-8bit` | ✅ Works | ~860 MB, quantized non-turbo. HF processor included. |
-| `mlx-community/whisper-large-v3-turbo-8bit` | ⚠️ Avoid on current oMLX | Smaller (~860 MB) but the repo is missing/has stripped the HuggingFace processor files. oMLX 0.3.8.dev1 throws `Processor not found. Make sure the model was loaded with a HuggingFace processor.` even after manually copying `preprocessor_config.json`, `tokenizer.json`, `tokenizer_config.json`, etc. from upstream `openai/whisper-large-v3-turbo`. The auto-recovery in ReClip+ unloads and retries once, but the underlying load still fails. May be fixed in a future oMLX release — until then, prefer `fp16` or `8bit`. |
 | `mlx-community/whisper-large-v3-mlx` | ❌ Doesn't load | Ships `weights.npz` instead of `model.safetensors`; oMLX's model discovery ignores it. |
 
-ReClip+ has a workaround for the oMLX "stale processor" caching bug: when it sees `Processor not found` from `/v1/audio/transcriptions`, it POSTs to `/v1/models/{model}/unload` and retries once. That fix handles transient stale-state cases, but won't help when the underlying repo genuinely lacks the processor files (which is the turbo-8bit situation above).
+ReClip+ has a workaround for the oMLX "stale processor" caching bug: when it sees `Processor not found` from `/v1/audio/transcriptions`, it POSTs to `/v1/models/{model}/unload` and retries once. That handles transient stale-state cases. The Turbo warning above applied to oMLX 0.3.x and is superseded by the 0.4.4 verification.
 
 #### oMLX 0.3.x: WhisperProcessor fails for ALL models
 
