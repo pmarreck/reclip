@@ -20,7 +20,9 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 
 ### Added in this fork
 - **Transcription** — speech-to-text via Whisper (oMLX, Ollama, or OpenAI-compatible endpoint)
-- **Speaker diarization + naming** — local *who-spoke-when* via [speakrs](https://github.com/avencera/speakrs) (consumed through the [speakrs_ffi](https://github.com/pmarreck/speakrs_ffi) C FFI; ~220× realtime on Apple Silicon), word-level speaker attribution from Whisper word timestamps, and an LLM pass that names speakers from context cues (self-intros, address terms, video metadata) — confidence-gated so it never invents names
+- **Speaker diarization + naming** — the opt-in **Diarize** control runs local *who-spoke-when* analysis via [speakrs](https://github.com/avencera/speakrs) (consumed through the [speakrs_ffi](https://github.com/pmarreck/speakrs_ffi) C FFI; ~220× realtime on Apple Silicon), word-level speaker attribution from Whisper word timestamps, and an LLM pass that names speakers from context cues (self-intros, address terms, video metadata) — confidence-gated so it never invents names
+- **Source-aware actions** — Summarize, Translate Summary, Translate Transcript, and Counterargue use a diarized transcript when it is already cached; otherwise they remain fast and use the raw transcript. Raw and diarized outputs are cached separately and visibly labeled.
+- **Readable raw transcripts** — non-diarized Whisper output gains lossless paragraph breaks at speech pauses and sentence boundaries; speaker-labeled transcripts keep their existing turn structure.
 - **Configurable actions** — Summarize / Translate / Counterargue ship as defaults in `~/.config/reclip+/actions.json`; add your own named button by adding `{id, name, source, system_prompt, params}` to the file (hot-reloaded). Actions chain: `source` is `transcript`, `diarized`, or another action's id, and missing upstream steps run automatically
 - **Text-to-speech** — local TTS playback of summaries/translations via Qwen3-TTS / Voxtral / Kokoro
 - **Image-host extraction** — Instagram / Threads / Reddit / X / Pinterest / Tumblr / Imgur / Flickr / DeviantArt carousels render as a 2-up grid via [gallery-dl](https://github.com/mikf/gallery-dl); long-press / right-click saves images directly. Tap to open raw image in a new tab.
@@ -284,7 +286,7 @@ stays loopback-gated, but that does not make the media API multi-user safe.
 2. Choose **MP4** (video) or **MP3** (audio)
 3. Click **Fetch** to load video info and thumbnails
 4. Select quality/resolution if available
-5. Click **Download**, **Transcribe**, **Speakers**, or an action such as **Summarize**
+5. Click **Download**, **Transcribe**, **Diarize**, or an action such as **Summarize**. Text actions use a cached diarized transcript when present, but never trigger diarization on their own.
 6. Results appear inline — expand, read, and save as needed
 7. For playlists, use batch buttons: **Download All**, **Transcribe All**, **Summarize All**
 

@@ -1,5 +1,36 @@
 # PLAN
 
+## Active: Source-aware actions and raw-transcript readability (2026-08-17)
+- [x] Rename the explicit diarization control and add its requested tooltip.
+      Curiosity poke: the label must make the extra work opt-in without
+      obscuring that existing diarized cache entries remain reusable.
+      Completed 2026-08-17 12:35 EDT: the control is now **Diarize** with the
+      requested description; endpoint, cache, and CLI compatibility remain
+      unchanged.
+- [x] Prefer an already-cached diarized transcript for the four shipped text
+      actions, while retaining raw transcription as the no-extra-work default.
+      Cache raw and diarized action variants separately so a later diarization
+      never reuses output generated from mixed speaker text.
+      Curiosity poke: action chains such as Translate Summary must retain the
+      same source lineage as their upstream summary.
+      Completed 2026-08-17 12:35 EDT: Summary, both Translate actions, and
+      Counterargue select existing diarization without triggering it; their
+      separate cache artifacts and UI labels preserve source lineage through
+      summary translation and TTS.
+- [x] Paragraphize non-diarized transcripts using timestamp pauses and sentence
+      boundaries, inserting layout only and preserving transcription content.
+      Curiosity poke: timestamp-free backend output still needs a deterministic
+      sentence-length fallback; semantic topic segmentation remains a separate,
+      language-sensitive evaluation.
+      Completed 2026-08-17 12:35 EDT: a pure formatter uses long pauses at
+      sentence boundaries, has a sentence-length fallback, and rejects a
+      timestamp-derived layout if its word sequence differs from STT output.
+- [ ] Evaluate optional semantic topic segmentation on multilingual, noisy
+      transcripts before making it an automatic formatting source.
+      Keep it separate from lossless paragraphization: lexical segmentation is
+      language-sensitive, while an LLM approach adds latency and may rewrite
+      user content.
+
 ## Active: YouTube speaker-workflow audio fetch (2026-08-17)
 - [x] Prefer a verified progressive MP4 source for audio/transcription and
       retain adaptive DASH as a fallback.

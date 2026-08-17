@@ -25,6 +25,7 @@ from speakers import (
     merge_speakers, format_diarized, speaker_label_map,
     build_naming_prompt, parse_naming_response, apply_names,
 )
+from paragraphize import paragraphize_transcript
 
 app = Flask(__name__)
 DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
@@ -145,6 +146,11 @@ AUDIO_SOURCE_FORMATS = (
     "bestvideo+bestaudio/best",
 )
 AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
+DIARIZED_SOURCE = "diarized"
+RAW_SOURCE = "transcript"
+PREFER_DIARIZED_ACTION_IDS = frozenset({
+    "summarize", "translate", "translate_transcript", "counterargue",
+})
 
 
 def _last_stderr_line(result):
@@ -234,20 +240,22 @@ def _save_transcript(url, raw_text, segments=None):
 
     `segments` (list of {start, end, text} from the STT backend) is cached
     as transcript_segments.json — the diarization merge step aligns speaker
-    turns against these timestamps.
+    turns against these timestamps. The readable raw artifact gains only
+    lossless paragraph whitespace; segments remain untouched for alignment.
     """
-    full = _metadata_header(url) + raw_text
+    full = _metadata_header(url) + paragraphize_transcript(raw_text, segments)
     cache.write_text(url, "transcript.txt", full)
     if segments:
         cache.write_text(url, "transcript_segments.json", json.dumps(segments))
     return full
 
 
-def _translate_filename(source, language):
+def _translate_filename(source, language, source_variant=RAW_SOURCE):
     lang = language.lower().strip().replace(" ", "-")
-    if source == "summary":
-        return f"summary-{lang}.txt"
-    return f"translation-{lang}.txt"
+    prefix = "summary" if source == "summary" else "translation"
+    if source_variant == DIARIZED_SOURCE:
+        prefix += "-diarized"
+    return f"{prefix}-{lang}.txt"
 
 
 def _action_or_builtin(action_id):
@@ -291,20 +299,37 @@ def _slugify_params(params):
     return "-".join(vals)
 
 
-def _action_output_filename(action, params):
+def _action_output_filename(action, params, source_variant=RAW_SOURCE):
     """Cache filename for an action's output. The three legacy ids keep their
     historical filenames (other features — TTS source map, recents — read
-    them); custom actions use the action-<id> namespace."""
+    them); diarized inputs receive a separate sibling artifact so their output
+    cannot be mistaken for a raw-transcript result."""
     params = params or {}
+    suffix = "-diarized" if source_variant == DIARIZED_SOURCE else ""
     if action.id == "summarize":
-        return "summary.txt"
+        return f"summary{suffix}.txt"
     if action.id == "counterargue":
-        return "counterargue.txt"
+        return f"counterargue{suffix}.txt"
     if action.id in ("translate", "translate_transcript") and "language" in params:
         legacy_source = "summary" if action.source == "summarize" else "transcript"
-        return _translate_filename(legacy_source, params["language"])
+        return _translate_filename(legacy_source, params["language"], source_variant)
     slug = _slugify_params(params)
-    return f"action-{action.id}{'-' + slug if slug else ''}.txt"
+    return f"action-{action.id}{suffix}{'-' + slug if slug else ''}.txt"
+
+
+def _action_source_variant(url, action):
+    """Choose source lineage once per shipped action without forcing diarization.
+
+    The normal action buttons gain attribution only when a user has already
+    requested Diarize. Explicit diarized custom actions retain their existing
+    eager behavior; other custom actions keep their raw-transcript default.
+    """
+    if action.source == DIARIZED_SOURCE:
+        return DIARIZED_SOURCE
+    if (action.id in PREFER_DIARIZED_ACTION_IDS
+            and cache.read_text(url, "transcript_diarized.txt") is not None):
+        return DIARIZED_SOURCE
+    return RAW_SOURCE
 
 
 def _chat_cfg_for(action_id):
@@ -327,13 +352,15 @@ def _chat_cfg_for(action_id):
             "RECLIP_SUMMARIZE_MODEL", "RECLIP_SUMMARIZE_URL")
 
 
-def _resolve_source_text(url, source):
+def _resolve_source_text(url, source, source_variant=RAW_SOURCE):
     """Text for an action source: 'transcript' or another action's id.
     Missing upstream outputs are computed recursively (auto-chain) with
     empty params and cached, so repeated chains are cheap."""
-    if source == "transcript":
+    if source == RAW_SOURCE:
+        if source_variant == DIARIZED_SOURCE:
+            return _resolve_source_text(url, DIARIZED_SOURCE, source_variant)
         return _ensure_transcript(url)
-    if source == "diarized":
+    if source == DIARIZED_SOURCE:
         text = cache.read_text(url, "transcript_diarized.txt")
         if text is None:
             _log("action", "diarized transcript not cached — running pipeline first")
@@ -343,15 +370,18 @@ def _resolve_source_text(url, source):
     upstream = actions_registry.get(source)
     if upstream is None:
         raise RuntimeError(f"unknown action source: {source!r}")
-    fname = _action_output_filename(upstream, {})
+    upstream_variant = source_variant
+    if upstream.source == DIARIZED_SOURCE:
+        upstream_variant = DIARIZED_SOURCE
+    fname = _action_output_filename(upstream, {}, upstream_variant)
     text = cache.read_text(url, fname)
     if text is None:
         _log("action", "source %r not cached — running it first", source)
-        text = _run_action_sync(url, upstream, {})
+        text = _run_action_sync(url, upstream, {}, upstream_variant)
     return text
 
 
-def _run_action_sync(url, action, params):
+def _run_action_sync(url, action, params, source_variant=None):
     """Generic LLM action: resolve source text, interpolate {params} into the
     system prompt, run the chat call, cache the output. Returns the text."""
     params = params or {}
@@ -359,10 +389,16 @@ def _run_action_sync(url, action, params):
         if p.required and not str(params.get(p.name, "")).strip():
             raise RuntimeError(f"missing required parameter: {p.name}")
 
-    source_text = _resolve_source_text(url, action.source)
+    source_variant = source_variant or _action_source_variant(url, action)
+    source_text = _resolve_source_text(url, action.source, source_variant)
     system_prompt = action.system_prompt
     for p in action.params:
         system_prompt = system_prompt.replace("{" + p.name + "}", str(params.get(p.name, "")))
+    if source_variant == DIARIZED_SOURCE:
+        system_prompt += (
+            "\nThe input contains speaker labels. Preserve attribution for important "
+            "claims and disagreements; do not merge different speakers' positions."
+        )
 
     chat_url, chat_model, chat_key, chat_hint, chat_model_hint, chat_url_hint = _chat_cfg_for(action.id)
     _log("action", "%s: calling LLM (model=%s, source=%d chars)",
@@ -378,22 +414,23 @@ def _run_action_sync(url, action, params):
         model_hint=chat_model_hint,
         url_hint=chat_url_hint,
     )
-    filename = _action_output_filename(action, params)
+    filename = _action_output_filename(action, params, source_variant)
     cache.write_text(url, filename, out)
     _log("action", "%s: done in %.1fs (%d chars -> %s)",
          action.id, time.time() - t0, len(out), filename)
     return out
 
 
-def _run_action_job(job_id, url, action, params):
+def _run_action_job(job_id, url, action, params, source_variant=None):
     """Job wrapper for _run_action_sync — populates the jobs dict like every
     other background op."""
     job = jobs[job_id]
     try:
-        out = _run_action_sync(url, action, params)
+        source_variant = source_variant or _action_source_variant(url, action)
+        out = _run_action_sync(url, action, params, source_variant)
         job["status"] = "done"
         job["text"] = out
-        job["filename"] = _action_output_filename(action, params)
+        job["filename"] = _action_output_filename(action, params, source_variant)
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)
@@ -1176,13 +1213,17 @@ def run_action_endpoint(action_id):
         if p.required and not str(params.get(p.name, "")).strip():
             return jsonify({"error": f"Missing required parameter: {p.name}"}), 400
 
-    cached_text = cache.read_text(url, _action_output_filename(action, params))
+    source_variant = _action_source_variant(url, action)
+    filename = _action_output_filename(action, params, source_variant)
+    cached_text = cache.read_text(url, filename)
     if cached_text is not None:
-        return jsonify({"cached": True, "text": cached_text})
+        return jsonify({"cached": True, "text": cached_text, "filename": filename})
 
     job_id = uuid.uuid4().hex[:10]
     jobs[job_id] = {"status": "processing", "type": "text", "url": url}
-    thread = threading.Thread(target=_run_action_job, args=(job_id, url, action, params))
+    thread = threading.Thread(
+        target=_run_action_job, args=(job_id, url, action, params, source_variant)
+    )
     thread.daemon = True
     thread.start()
     return jsonify({"job_id": job_id})
@@ -1418,6 +1459,7 @@ def _speak_source_filename(source):
         "transcript": "transcript.txt",
         "summary": "summary.txt",
         "counterargue": "counterargue.txt",
+        "counterargue-diarized": "counterargue-diarized.txt",
         "diarized": "transcript_diarized.txt",
     }
     if source in fixed:

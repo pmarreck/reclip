@@ -1108,6 +1108,26 @@ class TestTranscriptSegments:
         assert app.cache.read_text(url, "transcript_segments.json") is None
         assert app.cache.read_text(url, "transcript.txt") is not None
 
+    def test_save_transcript_paragraphizes_only_the_readable_raw_artifact(self, tmp_cache, monkeypatch):
+        import app
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata",
+                            lambda u: {"title": "T", "uploader": "U"})
+        url = "https://example.com/paragraphized"
+        first = " ".join(["one"] * 30) + "."
+        second = " ".join(["two"] * 30) + "."
+        third = " ".join(["three"] * 30) + "."
+        segments = [
+            {"start": 0.0, "end": 5.0, "text": first},
+            {"start": 5.1, "end": 10.0, "text": second},
+            {"start": 13.0, "end": 18.0, "text": third},
+        ]
+
+        app._save_transcript(url, f"{first} {second} {third}", segments=segments)
+
+        saved = app.cache.read_text(url, "transcript.txt")
+        assert f"{second}\n\n{third}" in saved
+        assert json.loads(app.cache.read_text(url, "transcript_segments.json")) == segments
+
 
 class TestDiarizeEndpoint:
     """POST /api/diarize — transcript segments × speakrs turns → named,
@@ -1373,6 +1393,74 @@ class TestActionEngine:
         assert seen[0]["system_prompt"] == "my custom edited prompt"
 
 
+class TestDiarizedActionLineage:
+    """Shipped text actions prefer an already-cached speaker transcript, but
+    keep their raw-transcript outputs as separate cache artifacts."""
+
+    URL = "https://example.com/diarized-action-lineage"
+
+    def _seed(self, app):
+        app.cache.write_text(self.URL, "transcript.txt", "raw mixed speech",
+                             meta={"url": self.URL, "title": "T"})
+        app.cache.write_text(self.URL, "transcript_diarized.txt",
+                             "Alice: one claim\n\nBob: a different claim")
+
+    def test_summarize_prefers_diarized_without_overwriting_raw_summary(self, tmp_cache, monkeypatch):
+        import app
+        self._seed(app)
+        app.cache.write_text(self.URL, "summary.txt", "RAW SUMMARY")
+        seen = []
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: seen.append(kw) or "SPEAKER SUMMARY")
+
+        out = app._run_action_sync(self.URL, app.actions_registry.get("summarize"), {})
+
+        assert out == "SPEAKER SUMMARY"
+        assert seen[0]["user_content"] == "Alice: one claim\n\nBob: a different claim"
+        assert app.cache.read_text(self.URL, "summary.txt") == "RAW SUMMARY"
+        assert app.cache.read_text(self.URL, "summary-diarized.txt") == "SPEAKER SUMMARY"
+
+    def test_translate_summary_builds_and_uses_diarized_summary_variant(self, tmp_cache, monkeypatch):
+        import app
+        self._seed(app)
+        app.cache.write_text(self.URL, "summary.txt", "RAW SUMMARY")
+        seen = []
+
+        def fake_chat(**kw):
+            seen.append(kw)
+            if "German" in kw["system_prompt"]:
+                return "DEUTSCHE SPRECHERZUSAMMENFASSUNG"
+            return "SPEAKER SUMMARY"
+        monkeypatch.setattr(app, "chat_completion", fake_chat)
+
+        out = app._run_action_sync(self.URL, app.actions_registry.get("translate"),
+                                   {"language": "German"})
+
+        assert out == "DEUTSCHE SPRECHERZUSAMMENFASSUNG"
+        assert [call["user_content"] for call in seen] == [
+            "Alice: one claim\n\nBob: a different claim", "SPEAKER SUMMARY",
+        ]
+        assert app.cache.read_text(self.URL, "summary.txt") == "RAW SUMMARY"
+        assert app.cache.read_text(self.URL, "summary-diarized.txt") == "SPEAKER SUMMARY"
+        assert app.cache.read_text(self.URL, "summary-diarized-german.txt") == "DEUTSCHE SPRECHERZUSAMMENFASSUNG"
+
+    @pytest.mark.parametrize(("action_id", "params", "filename"), [
+        ("summarize", {}, "summary-diarized.txt"),
+        ("translate_transcript", {"language": "Spanish"}, "translation-diarized-spanish.txt"),
+        ("counterargue", {}, "counterargue-diarized.txt"),
+    ])
+    def test_each_direct_shipped_action_prefers_diarized_transcript(
+            self, tmp_cache, monkeypatch, action_id, params, filename):
+        import app
+        self._seed(app)
+        seen = []
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: seen.append(kw) or "OUT")
+
+        app._run_action_sync(self.URL, app.actions_registry.get(action_id), params)
+
+        assert seen[0]["user_content"] == "Alice: one claim\n\nBob: a different claim"
+        assert app.cache.read_text(self.URL, filename) == "OUT"
+
+
 class TestActionsAPI:
     """GET /api/actions — registry listing for dynamic UI buttons.
     POST /api/action/<id> — generic job endpoint replacing per-kind routes."""
@@ -1440,6 +1528,21 @@ class TestActionsAPI:
         assert data.get("cached") is True
         assert data["text"] == "CACHED"
 
+    def test_diarized_cache_variant_wins_over_raw_cached_summary(self, client, tmp_cache):
+        import app
+        app.cache.write_text(self.URL, "summary.txt", "RAW SUMMARY")
+        app.cache.write_text(self.URL, "transcript_diarized.txt", "Alice: context")
+        app.cache.write_text(self.URL, "summary-diarized.txt", "SPEAKER SUMMARY")
+
+        resp = client.post("/api/action/summarize", json={"url": self.URL})
+        data = resp.get_json()
+
+        assert data == {
+            "cached": True,
+            "text": "SPEAKER SUMMARY",
+            "filename": "summary-diarized.txt",
+        }
+
     def test_unknown_action_404(self, client, tmp_cache):
         resp = client.post("/api/action/nonexistent", json={"url": self.URL})
         assert resp.status_code == 404
@@ -1467,6 +1570,12 @@ class TestSpeakSourceFilename:
     def test_diarized_source(self):
         import app
         assert app._speak_source_filename("diarized") == "transcript_diarized.txt"
+
+    def test_diarized_action_variants(self):
+        import app
+        assert app._speak_source_filename("summary-diarized") == "summary-diarized.txt"
+        assert app._speak_source_filename("translation-diarized-french") == "translation-diarized-french.txt"
+        assert app._speak_source_filename("counterargue-diarized") == "counterargue-diarized.txt"
 
     def test_translation_prefixes(self):
         import app

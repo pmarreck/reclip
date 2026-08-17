@@ -5,10 +5,12 @@ annotate=[
 	bin/reclip = Checkout-local CLI launcher using the reproducible Nix environment.
 	config.py = Loads ReClip settings; Turbo Whisper is the default STT for reliable word-timestamped long-form transcription.
 	diarizer.py = ctypes binding to libspeakrs_ffi (RECLIP_SPEAKRS_LIB); ffmpeg f32le decode helper
+	paragraphize.py = Lossless timestamp- and sentence-aware paragraph formatter for raw STT transcripts.
 	secrets.ini.example = Template for ~/.config/reclip+/secrets.ini — API keys for service processes that lack shell env
 	speakers.py = Pure speaker pipeline: word/segment merge vs turns, diarized formatting, LLM naming prompt/parse/confidence-gate
 	templates/index.html = Single-page ReClip UI; Copy actions use secure Clipboard API with a Firefox-compatible fallback and per-operation feedback.
 	tests/test_actions.py = 22 tests: defaults match config.py prompts, source chains, cycle/dup/malformed validation, hot-reload last-good
 	tests/test_cli.py = Hermetic public CLI contracts for media workflow delegation and PATH launcher.
+	tests/test_paragraphize.py = Pure regression contracts for lossless raw-transcript paragraphization.
 	tests/test_ui_template.py = Regression contracts for Copy control markup and Firefox-compatible clipboard fallback in the UI template.
 ]

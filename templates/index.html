@@ -834,7 +834,7 @@
       if (c.status === 'ready') {
         actionHtml = `<button class="card-dl-btn" onclick="dlCard(${idx})">Download</button>
           <button class="card-dl-btn card-btn-alt" onclick="transcribeCard(${idx})">Transcribe</button>
-          <button class="card-dl-btn card-btn-alt" onclick="speakersCard(${idx})">Speakers</button>
+          <button class="card-dl-btn card-btn-alt" onclick="speakersCard(${idx})" title="Do an extra pass to identify individual speakers when there are more than 1.">Diarize</button>
           ${actionButtonsHtml(idx)}
           ${qualityChips}`;
       } else if (c.status === 'downloading') {
@@ -854,6 +854,7 @@
         if (!opState) continue;
         const def_ = actionDefs.find(a => a.id === op);
         const label = def_ ? def_.name : op.replace(/_/g, ' ');
+        const sourceLabel = opState.filename?.includes('-diarized') ? ' (diarized)' : '';
         if (opState.status === 'processing') {
           opsHtml += `<div class="card-status downloading"><span class="spin"></span> ${label}...</div>`;
         } else if (opState.status === 'done') {
@@ -876,7 +877,7 @@
             : '';
           opsHtml += `<div class="op-result">
             <div class="op-result-header">
-              <span class="op-result-label">${label}</span>
+              <span class="op-result-label">${label}${sourceLabel}</span>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                 ${opState.audioUrl ? '' : listenHtml}
                 <button class="card-dl-btn done copy-btn" data-op="${op}" style="${btnStyle}" onclick="copyText(${idx},'${op}')">Copy</button>
@@ -1243,6 +1244,7 @@
 
     function _opToSource(opKey, op) {
       // Map UI op key to the API speak-source token
+      if (op?.filename?.endsWith('.txt')) return op.filename.slice(0, -4);
       const fixed = { transcribe: 'transcript', speakers: 'diarized',
                       summarize: 'summary', counterargue: 'counterargue' };
       if (fixed[opKey]) return fixed[opKey];
@@ -1493,7 +1495,10 @@
           return;
         }
         if (data.cached) {
-          c.ops[actionId] = { status: 'done', text: data.text, jobId: null, params: params };
+          c.ops[actionId] = {
+            status: 'done', text: data.text, jobId: null,
+            params: params, filename: data.filename,
+          };
           renderCard(idx);
           return;
         }
