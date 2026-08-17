@@ -34,7 +34,7 @@
         # degrade gracefully elsewhere (diarization simply unavailable).
         speakrsPkg = speakrs-ffi.packages.${system}.default or null;
         speakrsLib = if speakrsPkg == null then "" else
-          "${speakrsPkg}/lib/libspeakrs_ffi${if pkgs.stdenv.isDarwin then ".dylib" else ".so"}";
+          "${speakrsPkg}/lib/libspeakrs_ffi${if pkgs.stdenv.hostPlatform.isDarwin then ".dylib" else ".so"}";
         speakrsOrtLib = if speakrsPkg == null then "" else speakrsPkg.passthru.ortLib;
       in
       {

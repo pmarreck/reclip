@@ -1,5 +1,14 @@
 # PLAN
 
+## Active: Nix evaluation health (2026-08-17)
+- [x] Replace the deprecated Darwin platform predicate in the flake and verify
+      the package and test checks evaluate without warnings.
+      Curiosity poke: preserve the current platform-specific dynamic-library
+      filename on Darwin and Linux while changing only the Nix attribute path.
+      Completed 2026-08-17 12:47 EDT: updated ReClip and its pinned
+      `speakrs_ffi` input to `stdenv.hostPlatform.isDarwin`; the consumer flake
+      evaluation, full test suite, and package build are warning-free.
+
 ## Active: Source-aware actions and raw-transcript readability (2026-08-17)
 - [x] Rename the explicit diarization control and add its requested tooltip.
       Curiosity poke: the label must make the extra work opt-in without

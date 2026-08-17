@@ -48,11 +48,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1781124153,
-        "narHash": "sha256-tBYAQhyvFSlVrpT8s34XK8QNM8FQBvreM1fxWM9nRvE=",
+        "lastModified": 1786985122,
+        "narHash": "sha256-26MXeBxS0yOEx4DZCKcdFsSAnHfmwe/xB6Wsyzhtn0s=",
         "owner": "pmarreck",
         "repo": "speakrs_ffi",
-        "rev": "78278275f78c17a158ca15d7aaaff213cf197e64",
+        "rev": "dd4e492c1bf301f0e83c2ee4ed0e617b77d1fcff",
         "type": "github"
       },
       "original": {
