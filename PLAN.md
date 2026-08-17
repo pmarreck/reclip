@@ -18,6 +18,12 @@
       `averygan/reclip` upstream with the 10 upstream commits included; resolved
       the duplicate `/api/playlist` route by keeping the richer local response
       while preserving upstream's `urls` compatibility field.
+- [x] Fix YouTube audio-only 403 regression.
+      Completed 2026-08-17 12:42 EDT: direct yt-dlp audio/progressive extraction
+      (`-x` / format 18) reproduced HTTP 403 on the live fixture while the normal
+      video merge path succeeded; MP3 generation now downloads the working
+      `bestvideo+bestaudio/best` source, extracts MP3 locally with ffmpeg, then
+      discards the temporary video source.
 
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**

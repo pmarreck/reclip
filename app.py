@@ -137,6 +137,58 @@ def _metadata_header(url):
 
 
 STT_BIAS_PROMPT_MAX_CHARS = 600  # Whisper's prompt window is ~224 tokens
+AUDIO_SOURCE_FORMAT = "bestvideo+bestaudio/best"
+
+
+def _last_stderr_line(result):
+    text = (getattr(result, "stderr", "") or "").strip()
+    if not text:
+        return "Command failed"
+    return text.split("\n")[-1]
+
+
+def _source_files_for_template(out_template):
+    glob_pattern = out_template.replace("%(ext)s", "*")
+    return glob.glob(glob_pattern)
+
+
+def _download_audio_from_video_source(url, source_template, audio_path):
+    """Create an MP3 by downloading the known-good video path then extracting.
+
+    YouTube currently 403s some direct audio/progressive downloads that yt-dlp
+    picks for ``-x``. The normal ``bestvideo+bestaudio/best`` path still works,
+    so we use it as a local audio source and discard the merged video afterward.
+    """
+    cmd = [
+        "yt-dlp", "--no-playlist", "-f", AUDIO_SOURCE_FORMAT,
+        "--merge-output-format", "mp4", "-o", source_template, url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(_last_stderr_line(result))
+
+    source_files = [p for p in _source_files_for_template(source_template) if p != audio_path]
+    source_files.sort(key=lambda p: (not p.endswith(".mp4"), p))
+    if not source_files:
+        raise RuntimeError("Audio source download completed but no source file was found")
+
+    source_path = source_files[0]
+    extract_cmd = [
+        "ffmpeg", "-i", source_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2",
+        audio_path, "-y",
+    ]
+    result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(_last_stderr_line(result))
+    if not os.path.isfile(audio_path):
+        raise RuntimeError("Audio extraction completed but no mp3 file was found")
+
+    for path in source_files:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return audio_path
 
 
 def _stt_bias_prompt(meta, explicit_prompt, enabled):
@@ -159,25 +211,10 @@ def _ensure_audio(url):
         return cache.entry_path(url, "audio.mp3")
     # Fetch metadata before downloading (cheap, and useful later)
     _fetch_and_cache_metadata(url)
-    # Download using yt-dlp with audio extraction
-    cmd = [
-        "yt-dlp", "--no-playlist", "-x", "--audio-format", "mp3",
-        "-o", cache.entry_path(url, "audio.%(ext)s"), url,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip().split("\n")[-1])
     audio_path = cache.entry_path(url, "audio.mp3")
-    if not os.path.isfile(audio_path):
-        # yt-dlp may have named it differently
-        entry_dir = os.path.dirname(audio_path)
-        for f in os.listdir(entry_dir):
-            if f.startswith("audio."):
-                os.rename(os.path.join(entry_dir, f), audio_path)
-                break
-    if not os.path.isfile(audio_path):
-        raise RuntimeError("Audio download completed but no file found")
-    return audio_path
+    return _download_audio_from_video_source(
+        url, cache.entry_path(url, "audio_source.%(ext)s"), audio_path
+    )
 
 
 def _save_transcript(url, raw_text, segments=None):
@@ -344,23 +381,24 @@ def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
-    cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
-
-    if format_choice == "audio":
-        cmd += ["-x", "--audio-format", "mp3"]
-    elif format_id:
-        cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
-    else:
-        cmd += ["-f", "bestvideo+bestaudio/best", "--merge-output-format", "mp4"]
-
-    cmd.append(url)
-
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode != 0:
-            job["status"] = "error"
-            job["error"] = result.stderr.strip().split("\n")[-1]
-            return
+        if format_choice == "audio":
+            _download_audio_from_video_source(
+                url, out_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.mp3")
+            )
+        else:
+            cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
+            if format_id:
+                cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
+            else:
+                cmd += ["-f", AUDIO_SOURCE_FORMAT, "--merge-output-format", "mp4"]
+            cmd.append(url)
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                job["status"] = "error"
+                job["error"] = _last_stderr_line(result)
+                return
 
         files = glob.glob(os.path.join(DOWNLOAD_DIR, f"{job_id}.*"))
         if not files:

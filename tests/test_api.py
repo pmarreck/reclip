@@ -189,18 +189,60 @@ class TestTranscribeEndpoint:
         resp = client.post("/api/transcribe", json={})
         assert resp.status_code == 400
 
+    def test_ensure_audio_extracts_from_working_video_download(self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=transcribefmt"
+        calls = []
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata", lambda u: {})
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            if cmd[0] == "yt-dlp":
+                source_path = app.cache.entry_path(url, "audio_source.mp4")
+                os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                with open(source_path, "wb") as f:
+                    f.write(b"fake mp4 data")
+            elif cmd[0] == "ffmpeg":
+                audio_path = cmd[-2]
+                with open(audio_path, "wb") as f:
+                    f.write(b"fake mp3 data")
+
+            class FakeResult:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return FakeResult()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.mp3")
+        yt_dlp_cmd = calls[0]
+        ffmpeg_cmd = calls[1]
+        assert "-x" not in yt_dlp_cmd
+        assert "-f" in yt_dlp_cmd
+        assert yt_dlp_cmd[yt_dlp_cmd.index("-f") + 1] == app.AUDIO_SOURCE_FORMAT
+        assert "--merge-output-format" in yt_dlp_cmd
+        assert ffmpeg_cmd[:2] == ["ffmpeg", "-i"]
+        assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.mp3")
+
     @responses.activate
     def test_transcribe_uncached_returns_job_id(self, client, tmp_cache, monkeypatch):
         # Mock subprocess.run so yt-dlp "downloads" audio
         import app
 
-        def mock_run(*args, **kwargs):
-            # Simulate yt-dlp creating an audio file
-            url = args[0][-1] if args else kwargs.get("args", [])[-1]
-            audio_path = app.cache.entry_path(url, "audio.mp3")
-            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-            with open(audio_path, "wb") as f:
-                f.write(b"fake mp3 data")
+        def mock_run(cmd, *args, **kwargs):
+            # Simulate yt-dlp creating a video source, then ffmpeg extracting MP3.
+            if cmd[0] == "yt-dlp":
+                url = cmd[-1]
+                source_path = app.cache.entry_path(url, "audio_source.mp4")
+                os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                with open(source_path, "wb") as f:
+                    f.write(b"fake mp4 data")
+            elif cmd[0] == "ffmpeg":
+                audio_path = cmd[-2]
+                with open(audio_path, "wb") as f:
+                    f.write(b"fake mp3 data")
 
             class FakeResult:
                 returncode = 0
@@ -469,7 +511,7 @@ class TestDownloadCaching:
                 return FakeResult()
 
             # yt-dlp download call — create the downloaded file
-            ext = "mp3" if format_choice == "audio" else "mp4"
+            ext = "mp4"
             fake_file = os.path.join(download_dir, f"{job_id}.{ext}")
             with open(fake_file, "wb") as f:
                 f.write(b"fake media content")
@@ -523,6 +565,44 @@ class TestDownloadCaching:
 
         assert app.jobs[job_id]["status"] == "done"
         assert app.cache.has_file(url, "audio.mp3"), "audio.mp3 should be cached after audio download"
+
+    def test_audio_download_extracts_from_working_video_download(self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cacheaudiofmt"
+        job_id = "cacheaudfmt"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "Test Audio Format"}
+        calls = []
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            if cmd[0] == "yt-dlp":
+                fake_file = os.path.join(app.DOWNLOAD_DIR, f"{job_id}.mp4")
+                with open(fake_file, "wb") as f:
+                    f.write(b"fake media content")
+            elif cmd[0] == "ffmpeg":
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"fake mp3 content")
+
+            class FakeResult:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return FakeResult()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        app.run_download(job_id, url, "audio", None)
+
+        yt_dlp_cmd = calls[0]
+        ffmpeg_cmd = calls[1]
+        assert app.jobs[job_id]["status"] == "done"
+        assert "-x" not in yt_dlp_cmd
+        assert "-f" in yt_dlp_cmd
+        assert yt_dlp_cmd[yt_dlp_cmd.index("-f") + 1] == app.AUDIO_SOURCE_FORMAT
+        assert "--merge-output-format" in yt_dlp_cmd
+        assert ffmpeg_cmd[:2] == ["ffmpeg", "-i"]
+        assert ffmpeg_cmd[-2] == os.path.join(app.DOWNLOAD_DIR, f"{job_id}.mp3")
 
     def test_audio_download_does_not_cache_video(self, client, tmp_cache, monkeypatch):
         import app
