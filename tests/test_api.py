@@ -226,6 +226,54 @@ class TestTranscribeEndpoint:
         assert ffmpeg_cmd[:2] == ["ffmpeg", "-i"]
         assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.mp3")
 
+    def test_ensure_audio_prefers_progressive_source_then_retries_adaptive(self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=progressivefirst"
+        calls = []
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata", lambda u: {})
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            if cmd[0] == "yt-dlp":
+                source_format = cmd[cmd.index("-f") + 1]
+                if source_format == "bestvideo+bestaudio/best":
+                    source_path = app.cache.entry_path(url, "audio_source.mp4")
+                    os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                    with open(source_path, "wb") as f:
+                        f.write(b"fallback mp4 data")
+
+                    class FakeResult:
+                        returncode = 0
+                        stdout = ""
+                        stderr = ""
+                    return FakeResult()
+
+                class FailedResult:
+                    returncode = 1
+                    stdout = ""
+                    stderr = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+                return FailedResult()
+
+            audio_path = cmd[-2]
+            with open(audio_path, "wb") as f:
+                f.write(b"fake mp3 data")
+
+            class FakeResult:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return FakeResult()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.mp3")
+        yt_dlp_calls = [cmd for cmd in calls if cmd[0] == "yt-dlp"]
+        assert [cmd[cmd.index("-f") + 1] for cmd in yt_dlp_calls] == [
+            "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
+            "bestvideo+bestaudio/best",
+        ]
+
     @responses.activate
     def test_transcribe_uncached_returns_job_id(self, client, tmp_cache, monkeypatch):
         # Mock subprocess.run so yt-dlp "downloads" audio

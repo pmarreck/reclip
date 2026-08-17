@@ -1,5 +1,14 @@
 # PLAN
 
+## Active: YouTube speaker-workflow audio fetch (2026-08-17)
+- [x] Prefer a verified progressive MP4 source for audio/transcription and
+      retain adaptive DASH as a fallback.
+      Curiosity poke: a host without a progressive source must still retain
+      the prior fallback behavior and expose its final yt-dlp error.
+      Completed 2026-08-17 11:44 EDT: `qSlDXTfszT0` downloaded successfully
+      through progressive format 18; a deterministic 403 regression test
+      verifies retrying the prior adaptive selector only after that fails.
+
 ## Active: CLI media-workflow parity (2026-08-17)
 - [x] Define and test a stable CLI command surface for every web media workflow.
       Includes download, transcription, speaker diarization, registry actions,
@@ -53,9 +62,10 @@
 - [x] Fix YouTube audio-only 403 regression.
       Completed 2026-08-17 12:42 EDT: direct yt-dlp audio/progressive extraction
       (`-x` / format 18) reproduced HTTP 403 on the live fixture while the normal
-      video merge path succeeded; MP3 generation now downloads the working
-      `bestvideo+bestaudio/best` source, extracts MP3 locally with ffmpeg, then
-      discards the temporary video source.
+      video merge path succeeded; the initial mitigation downloaded the
+      `bestvideo+bestaudio/best` source, extracted MP3 locally with ffmpeg, then
+      discarded the temporary video source. Revised later the same day when a
+      fresh regression proved a progressive source worked where DASH did not.
 - [x] Diagnose repeated-token and repeated-segment transcription failure before
       adding any output cleanup.
       Completed 2026-08-17 10:37 EDT: cached `KwOUnk9tjUM` segment diagnostics

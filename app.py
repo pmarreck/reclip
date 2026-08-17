@@ -137,7 +137,14 @@ def _metadata_header(url):
 
 
 STT_BIAS_PROMPT_MAX_CHARS = 600  # Whisper's prompt window is ~224 tokens
-AUDIO_SOURCE_FORMAT = "bestvideo+bestaudio/best"
+# YouTube currently permits some progressive MP4s while returning 403 for the
+# corresponding DASH streams. Prefer one self-contained source for speech
+# workflows; retain the adaptive selection for hosts without that format.
+AUDIO_SOURCE_FORMATS = (
+    "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
+    "bestvideo+bestaudio/best",
+)
+AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
 
 
 def _last_stderr_line(result):
@@ -153,19 +160,24 @@ def _source_files_for_template(out_template):
 
 
 def _download_audio_from_video_source(url, source_template, audio_path):
-    """Create an MP3 by downloading the known-good video path then extracting.
+    """Create an MP3 from a progressive source, with adaptive media fallback.
 
-    YouTube currently 403s some direct audio/progressive downloads that yt-dlp
-    picks for ``-x``. The normal ``bestvideo+bestaudio/best`` path still works,
-    so we use it as a local audio source and discard the merged video afterward.
+    Direct audio extraction can receive YouTube 403 responses. Prefer a
+    self-contained MP4, then retry the prior adaptive video-plus-audio path
+    for hosts that do not expose a usable progressive source.
     """
-    cmd = [
-        "yt-dlp", "--no-playlist", "-f", AUDIO_SOURCE_FORMAT,
-        "--merge-output-format", "mp4", "-o", source_template, url,
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    if result.returncode != 0:
-        raise RuntimeError(_last_stderr_line(result))
+    last_error = "Command failed"
+    for source_format in AUDIO_SOURCE_FORMATS:
+        cmd = [
+            "yt-dlp", "--no-playlist", "--no-part", "-f", source_format,
+            "--merge-output-format", "mp4", "-o", source_template, url,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            break
+        last_error = _last_stderr_line(result)
+    else:
+        raise RuntimeError(last_error)
 
     source_files = [p for p in _source_files_for_template(source_template) if p != audio_path]
     source_files.sort(key=lambda p: (not p.endswith(".mp4"), p))
