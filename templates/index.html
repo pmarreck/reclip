@@ -879,7 +879,7 @@
               <span class="op-result-label">${label}</span>
               <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                 ${opState.audioUrl ? '' : listenHtml}
-                <button class="card-dl-btn done" style="${btnStyle}" onclick="copyText(${idx},'${op}')">Copy</button>
+                <button class="card-dl-btn done copy-btn" data-op="${op}" style="${btnStyle}" onclick="copyText(${idx},'${op}')">Copy</button>
                 ${isLong ? `<button class="card-dl-btn done" style="${btnStyle}" onclick="toggleExpand(${idx},'${op}')">${expanded ? 'Collapse' : 'Expand'}</button>` : ''}
                 <button class="card-dl-btn done" style="${btnStyle}" onclick="saveText(${idx}, '${op}')">Save</button>
               </div>
@@ -1199,16 +1199,46 @@
       renderCard(idx);
     }
 
-    function copyText(idx, opKey) {
+    async function copyToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (_) {
+          // Firefox can reject navigator.clipboard despite a user click.
+        }
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      try {
+        return document.execCommand('copy');
+      } catch (_) {
+        return false;
+      } finally {
+        document.body.removeChild(textarea);
+      }
+    }
+
+    async function copyText(idx, opKey) {
       const op = cardData[idx].ops?.[opKey];
       if (!op || !op.text) return;
-      navigator.clipboard.writeText(op.text).then(() => {
-        // Brief visual feedback — swap button text
-        const btns = document.querySelectorAll(`#card-${idx} .op-result-toggle`);
-        for (const btn of btns) {
-          if (btn.textContent === 'Copy') { btn.textContent = 'Copied!'; setTimeout(() => { btn.textContent = 'Copy'; }, 1500); break; }
+      const copied = await copyToClipboard(op.text);
+      const btns = document.querySelectorAll(`#card-${idx} .copy-btn`);
+      for (const btn of btns) {
+        if (btn.dataset.op === opKey) {
+          const label = copied ? 'Copied!' : 'Copy failed';
+          btn.textContent = label;
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+          break;
         }
-      });
+      }
     }
 
     function _opToSource(opKey, op) {

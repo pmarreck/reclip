@@ -42,14 +42,18 @@
       first 480s (77 consecutive word-timestamped segments, including both
       prior failure regions). It is now the tested/default model; Cohere is
       deferred because it lacks timestamps and would break diarization.
-- [ ] Change the live `config.ini` override to Turbo, reinstall the LaunchAgent,
+- [x] Change the live `config.ini` override to Turbo, reinstall the LaunchAgent,
       and verify the running service sees the new model.
-      Curiosity poke: cached transcripts remain historical output and require a
-      deliberate re-transcription rather than silent cache mutation.
-- [ ] Fix the Firefox summary Copy action with a browser-compatible clipboard
+      Completed 2026-08-17 10:42 EDT: `RECLIP_STT_MODEL` now resolves to Turbo
+      and `/api/service` confirmed the LaunchAgent is installed and running.
+      Cached transcripts remain historical output and require a deliberate
+      re-transcription rather than silent cache mutation.
+- [x] Fix the Firefox summary Copy action with a browser-compatible clipboard
       fallback and a corrected button-state selector.
-      Curiosity poke: clipboard permissions and secure-context rules differ by
-      browser, so success feedback must only display after a real copy succeeds.
+      Completed 2026-08-17 10:45 EDT: Copy uses the secure Clipboard API when
+      available, falls back to `textarea` plus `execCommand('copy')`, and gives
+      feedback on the corresponding Copy button. Browser automation was not
+      available on this machine; template regression coverage is deterministic.
 
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**
