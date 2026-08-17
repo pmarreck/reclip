@@ -22,6 +22,11 @@ _OMLX_RECOVERABLE_PATTERNS = (
 	re.compile(r"processor not found", re.IGNORECASE),
 )
 
+_UNAVAILABLE_MODEL_PATTERNS = (
+	re.compile(r"\bmodel\b.*\b(?:not loaded|not found|unavailable|unknown|does not exist)\b", re.IGNORECASE),
+	re.compile(r"\b(?:not loaded|not found|unavailable|unknown)\b.*\bmodel\b", re.IGNORECASE),
+)
+
 
 def _try_unload_omlx_model(api_url, model, api_key):
 	"""Best-effort POST to oMLX's /v1/models/{model}/unload to clear stale state.
@@ -45,6 +50,43 @@ def _is_recoverable(error_msg):
 	return any(p.search(error_msg) for p in _OMLX_RECOVERABLE_PATTERNS)
 
 
+def _response_error_message(resp, default):
+	"""Extract an OpenAI-compatible error field without discarding plain text."""
+	error_msg = default
+	try:
+		body = resp.json()
+		if "error" in body:
+			error_msg = body["error"].get("message", str(body["error"]))
+	except (ValueError, KeyError):
+		error_msg = resp.text
+	return error_msg or default
+
+
+def _has_unavailable_model_error(error_msg):
+	return any(p.search(error_msg) for p in _UNAVAILABLE_MODEL_PATTERNS)
+
+
+def _configured_http_error(resp, default, model, model_hint, api_key_hint):
+	"""Add actionable local-config guidance to OpenAI-compatible HTTP errors."""
+	error_msg = _response_error_message(resp, default)
+	if _has_unavailable_model_error(error_msg):
+		error_msg += (
+			f" The configured model {model!r} is unavailable from this server; "
+			f"load it there or set {model_hint} to a model the endpoint exposes."
+		)
+	if resp.status_code in (401, 403) and api_key_hint:
+		error_msg += f" (set {api_key_hint})"
+	return error_msg
+
+
+def _unreachable_service_error(service_name, url, url_hint, error):
+	"""Turn low-level connection failures into a precise backend setup action."""
+	return LLMError(
+		f"Cannot reach the {service_name} at {url}: {error}. "
+		f"Start the server or set {url_hint} to its OpenAI-compatible endpoint."
+	)
+
+
 def _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps=False):
 	"""Single transcription request. Returns (status_code, json_or_text_dict)."""
 	headers = {}
@@ -64,7 +106,8 @@ def _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps=Fals
 	return resp
 
 
-def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", word_timestamps=False):
+def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", word_timestamps=False,
+			   model_hint="RECLIP_STT_MODEL", url_hint="RECLIP_STT_URL"):
 	"""Post an audio file for transcription via multipart form upload.
 
 	Sends file + model as multipart/form-data to any OpenAI-compatible
@@ -73,16 +116,13 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", w
 	Auto-recovers from oMLX's "Processor not found" stale-load bug by
 	unloading the model and retrying once.
 	"""
-	resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
+	try:
+		resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
+	except requests.RequestException as e:
+		raise _unreachable_service_error("speech-to-text service", url, url_hint, e) from e
 
 	if resp.status_code >= 400:
-		error_msg = "Transcription failed"
-		try:
-			body = resp.json()
-			if "error" in body:
-				error_msg = body["error"].get("message", str(body["error"]))
-		except (ValueError, KeyError):
-			error_msg = resp.text
+		error_msg = _response_error_message(resp, "Transcription failed")
 
 		# Auto-recover: oMLX caches "no processor" state until model is reloaded.
 		# Unload it and try once more.
@@ -92,7 +132,10 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", w
 				error_msg, model,
 			)
 			_try_unload_omlx_model(url, model, api_key)
-			resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
+			try:
+				resp = _do_transcribe(audio_path, url, model, api_key, prompt, word_timestamps)
+			except requests.RequestException as e:
+				raise _unreachable_service_error("speech-to-text service", url, url_hint, e) from e
 			if resp.status_code < 400:
 				_logger.info("STT auto-recovery succeeded after model reload")
 				result = resp.json()
@@ -103,16 +146,9 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", w
 					"segments": result.get("segments"),
 				}
 			# Still failing — re-extract the error message
-			try:
-				body = resp.json()
-				if "error" in body:
-					error_msg = body["error"].get("message", str(body["error"]))
-			except (ValueError, KeyError):
-				error_msg = resp.text
-
-		if resp.status_code in (401, 403) and api_key_hint:
-			error_msg += f" (set {api_key_hint})"
-		raise LLMError(error_msg)
+		raise LLMError(_configured_http_error(
+			resp, "Transcription failed", model, model_hint, api_key_hint,
+		))
 
 	result = resp.json()
 	return {
@@ -123,7 +159,8 @@ def transcribe(audio_path, url, model, api_key="", prompt="", api_key_hint="", w
 	}
 
 
-def chat_completion(url, model, api_key="", system_prompt="", user_content="", api_key_hint=""):
+def chat_completion(url, model, api_key="", system_prompt="", user_content="", api_key_hint="",
+					model_hint="RECLIP_SUMMARIZE_MODEL", url_hint="RECLIP_SUMMARIZE_URL"):
 	"""Send a chat completion request to any OpenAI-compatible endpoint.
 
 	Builds a two-message conversation (system + user) as JSON and returns
@@ -141,27 +178,24 @@ def chat_completion(url, model, api_key="", system_prompt="", user_content="", a
 		],
 	}
 
-	resp = requests.post(url, headers=headers, json=payload, timeout=600)
+	try:
+		resp = requests.post(url, headers=headers, json=payload, timeout=600)
+	except requests.RequestException as e:
+		raise _unreachable_service_error("chat service", url, url_hint, e) from e
 
 	if resp.status_code >= 400:
-		error_msg = "Chat completion failed"
-		try:
-			body = resp.json()
-			if "error" in body:
-				error_msg = body["error"].get("message", str(body["error"]))
-		except (ValueError, KeyError):
-			error_msg = resp.text
-		if resp.status_code in (401, 403) and api_key_hint:
-			error_msg += f" (set {api_key_hint})"
-		raise LLMError(error_msg)
+		raise LLMError(_configured_http_error(
+			resp, "Chat completion failed", model, model_hint, api_key_hint,
+		))
 
 	result = resp.json()
 	return result["choices"][0]["message"]["content"]
 
 
 def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
-                   response_format="wav", api_key_hint="",
-                   ref_audio_path="", ref_text="", instructions=""):
+				   response_format="wav", api_key_hint="",
+				   ref_audio_path="", ref_text="", instructions="",
+				   model_hint="RECLIP_TTS_MODEL", url_hint="RECLIP_TTS_URL"):
 	"""Generate speech audio from text via OpenAI-compatible TTS endpoint.
 
 	For voice cloning (Qwen3-TTS-Base, F5-TTS, etc.) pass both:
@@ -209,18 +243,14 @@ def text_to_speech(url, model, text, api_key="", voice="", speed=1.0,
 			payload["ref_audio"] = base64.b64encode(f.read()).decode("ascii")
 		payload["ref_text"] = ref_text
 
-	resp = requests.post(url, headers=headers, json=payload, timeout=600)
+	try:
+		resp = requests.post(url, headers=headers, json=payload, timeout=600)
+	except requests.RequestException as e:
+		raise _unreachable_service_error("text-to-speech service", url, url_hint, e) from e
 
 	if resp.status_code >= 400:
-		error_msg = "Text-to-speech failed"
-		try:
-			body = resp.json()
-			if "error" in body:
-				error_msg = body["error"].get("message", str(body["error"]))
-		except (ValueError, KeyError):
-			error_msg = resp.text
-		if resp.status_code in (401, 403) and api_key_hint:
-			error_msg += f" (set {api_key_hint})"
-		raise LLMError(error_msg)
+		raise LLMError(_configured_http_error(
+			resp, "Text-to-speech failed", model, model_hint, api_key_hint,
+		))
 
 	return resp.content

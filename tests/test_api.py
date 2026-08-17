@@ -1267,6 +1267,19 @@ class TestActionEngine:
         assert len(seen) == 1
         assert seen[0]["user_content"] == "CACHED SUMMARY"
 
+    def test_translate_passes_its_own_backend_setting_hints(self, tmp_cache, monkeypatch):
+        import app
+        self._seed_transcript(app)
+        app.cache.write_text(self.URL, "summary.txt", "CACHED SUMMARY")
+        seen = []
+        monkeypatch.setattr(app, "chat_completion", lambda **kw: seen.append(kw) or "OUT")
+
+        app._run_action_sync(self.URL, app.actions_registry.get("translate"),
+                             {"language": "French"})
+
+        assert seen[0]["model_hint"] == "RECLIP_TRANSLATE_MODEL"
+        assert seen[0]["url_hint"] == "RECLIP_TRANSLATE_URL"
+
     def test_missing_required_param_raises(self, tmp_cache, monkeypatch):
         import app
         self._seed_transcript(app)

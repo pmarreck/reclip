@@ -125,6 +125,57 @@ class TestTranscribe:
 			)
 
 	@responses.activate
+	def test_missing_transcription_model_explains_how_to_configure_it(self, tmp_path):
+		from llm_client import transcribe, LLMError
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"error": {"message": "model not loaded"}},
+			status=400,
+		)
+
+		with pytest.raises(LLMError) as caught:
+			transcribe(
+				audio_path=str(audio_file),
+				url="http://localhost:8000/v1/audio/transcriptions",
+				model="whisper-test-model",
+				api_key="",
+				prompt="",
+			)
+
+		message = str(caught.value)
+		assert "model not loaded" in message
+		assert "whisper-test-model" in message
+		assert "RECLIP_STT_MODEL" in message
+		assert "load it" in message
+
+	def test_unreachable_transcription_endpoint_explains_url_setting(self, tmp_path, monkeypatch):
+		import llm_client
+		from llm_client import transcribe, LLMError
+		audio_file = tmp_path / "audio.mp3"
+		audio_file.write_bytes(b"data")
+
+		def raise_connection_error(*_args, **_kwargs):
+			raise llm_client.requests.ConnectionError("connection refused")
+
+		monkeypatch.setattr(llm_client, "_do_transcribe", raise_connection_error)
+		with pytest.raises(LLMError) as caught:
+			transcribe(
+				audio_path=str(audio_file),
+				url="http://localhost:8000/v1/audio/transcriptions",
+				model="whisper-test-model",
+				api_key="",
+				prompt="",
+			)
+
+		message = str(caught.value)
+		assert "Cannot reach the speech-to-text service" in message
+		assert "RECLIP_STT_URL" in message
+		assert "connection refused" in message
+
+	@responses.activate
 	def test_processor_not_found_auto_recovery(self, tmp_path):
 		"""oMLX 'Processor not found' triggers unload + retry, then succeeds."""
 		from llm_client import transcribe

@@ -41,56 +41,84 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 
 ## Quick Start
 
-### With Nix (recommended)
+ReClip is supported through its Nix development environment. It needs an
+OpenAI-compatible inference server for transcription and actions; the default
+configuration targets a local [oMLX Server](https://github.com/jundot/omlx) at
+`http://localhost:8000`.
 
-```bash
-git clone https://github.com/pmarreck/reclip.git
-cd reclip
-RECLIP_API_KEY=your_omlx_key ./run
-```
+1. Install and start oMLX. The macOS app's first-run flow configures storage,
+   an optional API key, and server startup. Its admin dashboard can download
+   models directly. Download/load models whose API-visible names match the
+   ReClip settings below, or choose your own and set the corresponding
+   `RECLIP_*_MODEL` value. Check the names exposed by `GET /v1/models` or the
+   oMLX admin dashboard; directory aliases are valid model names.
+2. Create a service-safe secret file if oMLX uses an API key:
 
-### Without Nix
+   ```bash
+   mkdir -p ~/.config/reclip+
+   cp secrets.ini.example ~/.config/reclip+/secrets.ini
+   chmod 600 ~/.config/reclip+/secrets.ini
+   # Edit RECLIP_API_KEY=... in that file.
+   ```
 
-```bash
-pip install flask requests gallery-dl
-brew install yt-dlp ffmpeg gallery-dl    # or: apt install ffmpeg && pip install yt-dlp gallery-dl
-RECLIP_API_KEY=your_omlx_key python app.py
-```
+   `secrets.ini` is hot-reloaded and works for both terminal launches and the
+   optional launchd/systemd service. It is never committed.
+3. Clone and run ReClip:
 
-Open **http://localhost:8899**.
+   ```bash
+   git clone https://github.com/pmarreck/reclip.git
+   cd reclip
+   ./run
+   ```
+
+Open **http://localhost:8899**. The first launch creates
+`~/.config/reclip+/config.ini` and `actions.json`; edit `config.ini` when your
+endpoint URLs or model names differ from the defaults.
+
+### First-request troubleshooting
+
+The default STT model is `whisper-large-v3-turbo-8bit`; it must be available
+to the configured STT endpoint. Summaries and translations also need a chat
+model, and Listen needs a TTS model. When a backend rejects a model, ReClip
+reports the attempted model plus the exact `RECLIP_*_MODEL` setting to change.
+When it cannot connect, it reports the endpoint and its `RECLIP_*_URL` setting.
+Use the oMLX admin dashboard or `GET /v1/models` to verify the model name
+before changing ReClip's config.
 
 ### CLI
 
 ```bash
-# Fetch video info
-python cli.py info 'https://youtube.com/watch?v=...'
+# Run from the checkout (also works after adding this checkout's bin/ to PATH)
+./bin/reclip info 'https://youtube.com/watch?v=...'
 
-# Transcribe (downloads audio, runs Whisper, caches result)
-python cli.py transcribe 'https://youtube.com/watch?v=...'
+# Download audio or video through the same fallback-aware workflow as the UI
+./bin/reclip download 'https://youtube.com/watch?v=...' --format audio
 
-# Summarize (transcribes first if needed)
-python cli.py summarize 'https://youtube.com/watch?v=...'
+# Transcribe, then optionally diarize speakers
+./bin/reclip transcribe 'https://youtube.com/watch?v=...'
+./bin/reclip speakers 'https://youtube.com/watch?v=...'
 
-# Translate a transcript to Spanish
-python cli.py translate 'https://youtube.com/watch?v=...' Spanish
+# Built-in action shortcuts
+./bin/reclip summarize 'https://youtube.com/watch?v=...'
+./bin/reclip translate 'https://youtube.com/watch?v=...' Spanish
 
-# Translate a summary to French
-python cli.py translate 'https://youtube.com/watch?v=...' French --source summary
+# Discover and run custom actions; repeat --param as needed
+./bin/reclip actions
+./bin/reclip action 'https://youtube.com/watch?v=...' translate --param language=French
 
-# Show cache stats
-python cli.py cache
-
-# Show current config
-python cli.py config
+# Synthesize a summary or other cached text source
+./bin/reclip speak 'https://youtube.com/watch?v=...' --source summary --format mp3
 ```
 
 ## LLM Backend Configuration
 
-All three AI functions (transcription, summarization, translation) are independently configurable via environment variables. They all speak the OpenAI-compatible wire format, so any compatible server works.
+Transcription, actions, and TTS are independently configurable via
+`~/.config/reclip+/config.ini` or `RECLIP_*` environment variables. They use
+the OpenAI-compatible wire format, so any compatible server works.
 
 ### Common shortcut
 
-Set `RECLIP_API_KEY` to apply the same API key to all three backends:
+Set `RECLIP_API_KEY` to apply the same API key to every configured backend:
 
 ```bash
 RECLIP_API_KEY=your_key ./run
@@ -114,20 +142,22 @@ RECLIP_API_KEY=your_key ./run
 | `RECLIP_SUMMARIZE_URL` | `http://localhost:8000/v1/chat/completions` | Summarization endpoint |
 | `RECLIP_SUMMARIZE_API_KEY` | `$RECLIP_API_KEY` | Summarization-specific API key |
 | `RECLIP_SUMMARIZE_MODEL` | `gemma4-heretical-mlx-8bit` | Summarization model |
-| `RECLIP_SUMMARIZE_PROMPT` | (built-in) | Custom summarization system prompt |
 | `RECLIP_TRANSLATE_URL` | `http://localhost:8000/v1/chat/completions` | Translation endpoint |
 | `RECLIP_TRANSLATE_API_KEY` | `$RECLIP_API_KEY` | Translation-specific API key |
 | `RECLIP_TRANSLATE_MODEL` | `gemma4-heretical-mlx-8bit` | Translation model |
-| `RECLIP_TRANSLATE_PROMPT` | (built-in, uses `{language}`) | Custom translation system prompt |
 | `RECLIP_COUNTERARGUE_URL` | `http://localhost:8000/v1/chat/completions` | Counter-argument endpoint |
 | `RECLIP_COUNTERARGUE_API_KEY` | `$RECLIP_API_KEY` | Counter-argument API key |
 | `RECLIP_COUNTERARGUE_MODEL` | `gemma4-heretical-mlx-8bit` | Counter-argument model |
-| `RECLIP_COUNTERARGUE_PROMPT` | (built-in) | Custom counter-argument system prompt |
 | `RECLIP_TTS_URL` | `http://localhost:8000/v1/audio/speech` | TTS endpoint |
 | `RECLIP_TTS_API_KEY` | `$RECLIP_API_KEY` | TTS API key |
 | `RECLIP_TTS_MODEL` | `Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit` | TTS model (see [TTS model notes](#tts-model-notes)) |
 | `RECLIP_TTS_VOICE` | *warm feminine voice…* | Voice description, preset name, or path to a reference clip |
 | `RECLIP_TTS_VOICE_TEXT` | (empty) | Transcript of `RECLIP_TTS_VOICE` clip (only if VOICE is a path) |
+
+Prompts and action definitions are configured in
+`~/.config/reclip+/actions.json`, not environment variables. ReClip seeds the
+file with Summarize, Translate Summary, Translate Transcript, and Counterargue
+on first launch, then hot-reloads valid edits.
 
 ### Supported providers
 
@@ -240,7 +270,13 @@ RECLIP_HOST=0.0.0.0          # all interfaces
 RECLIP_HOST=100.x.y.z        # `tailscale ip -4` on this machine
 ```
 
-Then restart `python app.py` (host bind requires a restart; everything else hot-reloads). On a non-loopback bind, you'll see a yellow warning at startup. The Settings modal stays loopback-gated — only the local user can change config — but transcription/summarization/TTS endpoints become reachable to any peer who can route to the box.
+Then restart `python app.py` (host bind requires a restart; everything else
+hot-reloads). **ReClip has no user authentication today.** A non-loopback bind
+is only for a trusted single user on a trusted LAN or a tightly restricted
+Tailscale network. Any reachable peer can submit URLs, trigger downloads and
+AI jobs, and access media results. Do not expose it directly to the Internet;
+put authentication and network policy in front of it first. The Settings modal
+stays loopback-gated, but that does not make the media API multi-user safe.
 
 ## Usage
 
@@ -248,7 +284,7 @@ Then restart `python app.py` (host bind requires a restart; everything else hot-
 2. Choose **MP4** (video) or **MP3** (audio)
 3. Click **Fetch** to load video info and thumbnails
 4. Select quality/resolution if available
-5. Click **Download**, **Transcribe**, **Summarize**, or **Translate**
+5. Click **Download**, **Transcribe**, **Speakers**, or an action such as **Summarize**
 6. Results appear inline — expand, read, and save as needed
 7. For playlists, use batch buttons: **Download All**, **Transcribe All**, **Summarize All**
 
@@ -256,24 +292,15 @@ Then restart `python app.py` (host bind requires a restart; everything else hot-
 
 The cache stores downloaded audio, video, transcripts, summaries, and translations keyed by normalized URL (tracking parameters stripped). Repeated operations on the same URL are instant.
 
-```bash
-# Check cache usage
-python cli.py cache
-
-# Clear a specific cache entry
-rm -rf ~/.cache/reclip/<hash>/
-
-# Clear all
-rm -rf ~/.cache/reclip/
-```
+Use the cache controls in the loopback web UI to pin, delete, or clear cached
+entries. `./bin/reclip cache` reports the shared cache location and usage.
 
 When accessed from localhost, the web UI footer shows cache stats and configured LLM endpoints.
 
 ## Testing
 
 ```bash
-./test           # runs full suite via nix + pytest
-./test -v        # verbose
+./test           # runs the full hermetic suite via Nix + pytest
 ./test -k cache  # run only cache tests
 ```
 

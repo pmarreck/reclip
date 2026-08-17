@@ -1,5 +1,37 @@
 # PLAN
 
+## Active: CLI media-workflow parity (2026-08-17)
+- [x] Define and test a stable CLI command surface for every web media workflow.
+      Includes download, transcription, speaker diarization, registry actions,
+      and text-to-speech. Curiosity poke: the CLI must use the same cached
+      artifacts and backend configuration as the web app, rather than reviving
+      the previously broken direct audio-only yt-dlp path.
+      Completed 2026-08-17 11:15 EDT: contract covers Download, Transcribe,
+      Speakers, action registry/actions, Speak, and retained shortcuts.
+- [x] Implement the missing CLI commands as thin adapters over shared workflow
+      behavior, then preserve the established `info`, `summarize`, and
+      `translate` shortcuts. Install the checkout command at `bin/reclip` so
+      Peter's existing `~/Code/*/bin` PATH discovery exposes it automatically.
+      Curiosity poke: parameterized custom actions need deterministic
+      `NAME=VALUE` parsing and the same required-parameter validation as the
+      web UI.
+      Completed 2026-08-17 11:15 EDT: CLI is a thin adapter over the web
+      workflow facade; `bin/reclip` enters the checkout's Nix environment.
+- [x] Add hermetic CLI regression coverage for help, media workflows, shared
+      output, and error propagation; run the full suite and build.
+      Curiosity poke: command tests must not contact yt-dlp, oMLX, or a running
+      Flask server.
+      Completed 2026-08-17 11:15 EDT: four direct CLI contracts plus 341-test
+      full suite and Nix package build passed.
+- [x] Update sharing documentation and expected-backend error guidance based on
+      the completed readiness review.
+      Curiosity poke: a clean machine needs a concrete oMLX/model bootstrap
+      path, while non-loopback serving must remain explicitly single-user.
+      Completed 2026-08-17 11:15 EDT: README documents oMLX bootstrap,
+      `secrets.ini`, current action configuration, and unauthenticated remote
+      access boundaries. Missing-model/endpoint errors name the settings to
+      correct, and the package now includes all app runtime modules.
+
 ## Active: Transcription reliability + summary copy (2026-08-17)
 - [x] Reproduce current locked `yt-dlp` behavior against a live YouTube URL.
       Completed 2026-08-15 11:32 EDT: default live clip did not reproduce 403;
@@ -54,6 +86,23 @@
       available, falls back to `textarea` plus `execCommand('copy')`, and gives
       feedback on the corresponding Copy button. Browser automation was not
       available on this machine; template regression coverage is deterministic.
+
+## Future product and architecture
+- [ ] Multi-user capability with authentication and authorization.
+      Scope: identity/session handling, per-user cache/config isolation,
+      ownership checks on every media/action endpoint, and a secure remote
+      deployment model. Do not expose the current single-user server beyond a
+      trusted network before this exists.
+      Curiosity poke: gallery-dl browser cookies and user-configured backend
+      credentials must never become cross-user ambient authority.
+- [ ] Evaluate a Phoenix/Elixir replacement for the Flask application.
+      Treat this as a behavior-preserving replacement, not an incremental port:
+      first establish black-box API/cache/service contracts, then compare
+      Phoenix/LiveView, Oban-style jobs, and per-user persistence against the
+      existing local-first workflow. Keep Python only at unavoidable ML/FFI
+      adapter boundaries, or replace those with stable external services.
+      Curiosity poke: changing runtime should not silently weaken yt-dlp,
+      oMLX, speaker-diarization, or cache compatibility.
 
 ## ⏸ WIND-DOWN STATE (2026-07-06 — fleet migrating to Thelio; this Mac → darwin-build appliance)
 **GREEN. All work committed + pushed to `main` (origin). Working copy clean.**

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Run this checkout's CLI from Peter's ~/Code/*/bin PATH convention.
+set -u
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if command -v nix >/dev/null 2>&1; then
+	exec nix develop "$repo_dir" -c python "$repo_dir/cli.py" "$@"
+fi
+
+exec python3 "$repo_dir/cli.py" "$@"

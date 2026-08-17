@@ -296,14 +296,23 @@ def _action_output_filename(action, params):
 
 
 def _chat_cfg_for(action_id):
-    """(url, model, api_key, hint) for an action's chat call. Legacy ids keep
-    their dedicated config; custom actions use the summarize endpoint."""
-    if cfg.get(f"{action_id}_url"):
-        return (cfg[f"{action_id}_url"], cfg[f"{action_id}_model"],
-                cfg[f"{action_id}_api_key"],
-                f"RECLIP_{action_id.upper()}_API_KEY or RECLIP_API_KEY")
+    """Return endpoint, model, key, and exact setting hints for an action.
+
+    Legacy action ids retain their dedicated backend configuration;
+    ``translate_transcript`` deliberately shares Translate's settings. Custom
+    actions inherit Summary's backend, so model-not-found errors name the
+    setting a user can actually change.
+    """
+    config_action_id = "translate" if action_id == "translate_transcript" else action_id
+    if cfg.get(f"{config_action_id}_url"):
+        prefix = f"RECLIP_{config_action_id.upper()}"
+        return (cfg[f"{config_action_id}_url"], cfg[f"{config_action_id}_model"],
+                cfg[f"{config_action_id}_api_key"],
+                f"{prefix}_API_KEY or RECLIP_API_KEY",
+                f"{prefix}_MODEL", f"{prefix}_URL")
     return (cfg["summarize_url"], cfg["summarize_model"], cfg["summarize_api_key"],
-            "RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY")
+            "RECLIP_SUMMARIZE_API_KEY or RECLIP_API_KEY",
+            "RECLIP_SUMMARIZE_MODEL", "RECLIP_SUMMARIZE_URL")
 
 
 def _resolve_source_text(url, source):
@@ -343,7 +352,7 @@ def _run_action_sync(url, action, params):
     for p in action.params:
         system_prompt = system_prompt.replace("{" + p.name + "}", str(params.get(p.name, "")))
 
-    chat_url, chat_model, chat_key, chat_hint = _chat_cfg_for(action.id)
+    chat_url, chat_model, chat_key, chat_hint, chat_model_hint, chat_url_hint = _chat_cfg_for(action.id)
     _log("action", "%s: calling LLM (model=%s, source=%d chars)",
          action.id, chat_model, len(source_text))
     t0 = time.time()
@@ -354,6 +363,8 @@ def _run_action_sync(url, action, params):
         system_prompt=system_prompt,
         user_content=source_text,
         api_key_hint=chat_hint,
+        model_hint=chat_model_hint,
+        url_hint=chat_url_hint,
     )
     filename = _action_output_filename(action, params)
     cache.write_text(url, filename, out)
@@ -711,6 +722,58 @@ def download_all(entry_hash):
     )
 
 
+def _video_info(url):
+    """Fetch and normalize yt-dlp metadata for the web card and CLI display."""
+    cmd = ["yt-dlp", "--no-playlist", "-j", url]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("Timed out fetching video info") from e
+    if result.returncode != 0:
+        raise RuntimeError(_last_stderr_line(result))
+
+    # yt-dlp may return multiple JSON objects (one per line) for multi-video pages.
+    entries = []
+    for line in result.stdout.strip().split("\n"):
+        if not line.strip():
+            continue
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    if not entries:
+        raise RuntimeError("No video info returned")
+
+    # Use the first entry with video formats, or fall back to the first entry.
+    info = entries[0]
+    for entry in entries:
+        if any(f.get("height") for f in entry.get("formats", [])):
+            info = entry
+            break
+
+    # Build quality options: retain the best format for each resolution.
+    best_by_height = {}
+    for f in info.get("formats", []):
+        height = f.get("height")
+        if height and f.get("vcodec", "none") != "none":
+            tbr = f.get("tbr") or 0
+            if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
+                best_by_height[height] = f
+
+    formats = [
+        {"id": f["format_id"], "label": f"{height}p", "height": height}
+        for height, f in best_by_height.items()
+    ]
+    formats.sort(key=lambda x: x["height"], reverse=True)
+    return {
+        "title": info.get("title", ""),
+        "thumbnail": info.get("thumbnail", ""),
+        "duration": info.get("duration"),
+        "uploader": info.get("uploader", ""),
+        "formats": formats,
+    }
+
+
 @app.route("/api/info", methods=["POST"])
 def get_info():
     data = request.json
@@ -724,60 +787,9 @@ def get_info():
     if classify_url(url) == "images":
         return _info_images(url)
 
-    cmd = ["yt-dlp", "--no-playlist", "-j", url]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-        if result.returncode != 0:
-            return jsonify({"error": result.stderr.strip().split("\n")[-1]}), 400
-
-        # yt-dlp may return multiple JSON objects (one per line) for multi-video pages
-        entries = []
-        for line in result.stdout.strip().split("\n"):
-            if not line.strip():
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
-
-        if not entries:
-            return jsonify({"error": "No video info returned"}), 400
-
-        # Use the first entry with video formats, or fall back to the first entry
-        info = entries[0]
-        for entry in entries:
-            if any(f.get("height") for f in entry.get("formats", [])):
-                info = entry
-                break
-
-        # Build quality options — keep best format per resolution
-        best_by_height = {}
-        for f in info.get("formats", []):
-            height = f.get("height")
-            if height and f.get("vcodec", "none") != "none":
-                tbr = f.get("tbr") or 0
-                if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
-                    best_by_height[height] = f
-
-        formats = []
-        for height, f in best_by_height.items():
-            formats.append({
-                "id": f["format_id"],
-                "label": f"{height}p",
-                "height": height,
-            })
-        formats.sort(key=lambda x: x["height"], reverse=True)
-
-        return jsonify({
-            "title": info.get("title", ""),
-            "thumbnail": info.get("thumbnail", ""),
-            "duration": info.get("duration"),
-            "uploader": info.get("uploader", ""),
-            "formats": formats,
-        })
-    except subprocess.TimeoutExpired:
-        return jsonify({"error": "Timed out fetching video info"}), 400
-    except Exception as e:
+        return jsonify(_video_info(url))
+    except RuntimeError as e:
         return jsonify({"error": str(e)}), 400
 
 
@@ -1483,6 +1495,80 @@ def _run_speak(job_id, url, source, voice_override):
         job["status"] = "error"
         job["error"] = str(e)
         _log("speak", "ERROR: %s", e)
+
+
+def _run_media_job_sync(worker, *args):
+    """Run an existing media worker synchronously for non-HTTP callers.
+
+    The web layer schedules these workers in background threads. The CLI needs
+    their identical download, cache, and TTS behavior without starting Flask,
+    so it creates a private in-process job and returns its completed artifact.
+    """
+    job_id = f"cli-{uuid.uuid4().hex}"
+    jobs[job_id] = {"status": "processing", "type": "media", "url": args[0]}
+    try:
+        worker(job_id, *args)
+        job = jobs[job_id]
+        if job.get("status") != "done":
+            raise RuntimeError(job.get("error") or "Media operation failed")
+        if not job.get("file"):
+            raise RuntimeError("Media operation completed without an output file")
+        return {"file": job["file"], "filename": job.get("filename", "")}
+    finally:
+        jobs.pop(job_id, None)
+
+
+def download_url(url, format_choice="video", format_id=None):
+    """Download a URL through the same yt-dlp and cache path as the web UI.
+
+    This preserves the video-source-then-ffmpeg workaround for audio-only
+    YouTube 403s instead of allowing command-line callers to use a divergent
+    direct-audio downloader.
+    """
+    if format_choice not in ("audio", "video"):
+        raise RuntimeError("format must be 'audio' or 'video'")
+    return _run_media_job_sync(run_download, url, format_choice, format_id)
+
+
+def info_url(url):
+    """Return video metadata through the same yt-dlp normalization as the UI."""
+    if classify_url(url) == "images":
+        raise RuntimeError("Image-host metadata is available in the web UI")
+    return _video_info(url)
+
+
+def transcribe_url(url):
+    """Return the cached-or-new transcript using the web STT configuration."""
+    return _ensure_transcript(url)
+
+
+def diarize_url(url):
+    """Return the cached-or-new speaker-labelled transcript from the web pipeline."""
+    return _diarize_sync(url)
+
+
+def list_actions():
+    """Return the current hot-reloaded action registry for non-HTTP callers."""
+    actions_registry.maybe_reload()
+    return actions_registry.list()
+
+
+def action_url(url, action_id, params=None):
+    """Run one configured action using the same source chaining and cache as the UI."""
+    return _run_action_sync(url, _action_or_builtin(action_id), params or {})
+
+
+def speak_url(url, source="summary", voice_override="", output_format="wav"):
+    """Synthesize a cached text artifact with the web TTS pipeline synchronously."""
+    if output_format not in ("wav", "mp3"):
+        raise RuntimeError("format must be 'wav' or 'mp3'")
+    result = _run_media_job_sync(_run_speak, url, source, voice_override)
+    if output_format == "mp3":
+        mp3_path = result["file"].replace(".wav", ".mp3")
+        if os.path.isfile(mp3_path):
+            result["file"] = mp3_path
+            result["filename"] = result["filename"].replace(".wav", ".mp3")
+    return result
 
 
 @app.route("/api/speak", methods=["POST"])
