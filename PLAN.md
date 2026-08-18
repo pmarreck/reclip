@@ -1,5 +1,30 @@
 # PLAN
 
+## Completed: Audio acquisition and diarization wording (2026-08-18)
+- [x] Use YouTube's cookie-free Android player client to download the smallest
+      progressive video-with-audio, then stream-copy AAC into a cached M4A;
+      transcode to MP3 only when the source codec cannot be remuxed. Verified
+      against `GhUExv6_ud8` with a 15.9 MB, 21:45 AAC artifact and no 403.
+      Completed 2026-08-18 09:03 EDT.
+      Curiosity poke: preserve normal video-download format selection while
+      ensuring direct audio downloads and diarization share the same fix.
+- [x] Make the media type and diarization operation labels describe user intent.
+      Completed 2026-08-18 09:03 EDT.
+      Curiosity poke: retain internal operation/cache identifiers so existing
+      API, TTS, and cached result handling remains compatible.
+
+## Next: Configurable gallery authentication (2026-08-18)
+- [ ] Make gallery-dl browser-cookie extraction configurable for Firefox,
+      Chrome, and Safari; surface clear UI errors when the site requires a
+      login or the selected browser lacks usable site authentication.
+      Curiosity poke: browser-cookie access must remain opt-in when the server
+      is reachable off-loopback, and video/yt-dlp requests must not inherit it.
+- [ ] Replace the temporary progressive-video file with a direct `yt-dlp`
+      stdout to `ffmpeg` stdin pipe, leaving only the final cached audio on disk.
+      Curiosity poke: a failed M4A stream copy consumes the pipe, so the rare
+      MP3 fallback must deliberately redownload or inspect codec compatibility
+      before starting the transfer.
+
 ## Active: Nix evaluation health (2026-08-17)
 - [x] Replace the deprecated Darwin platform predicate in the flake and verify
       the package and test checks evaluate without warnings.

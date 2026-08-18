@@ -44,6 +44,18 @@ def test_diarize_button_explains_its_extra_speaker_pass():
 	assert 'onclick="speakersCard(${idx})" title="Do an extra pass to identify individual speakers when there are more than 1.">Diarize</button>' in template
 
 
+def test_media_type_toggle_uses_intent_labels():
+	template = TEMPLATE_PATH.read_text()
+	assert 'data-format="video" onclick="setFormat(this)">Video</button>' in template
+	assert 'data-format="audio" onclick="setFormat(this)">Audio</button>' in template
+
+
+def test_diarize_operation_uses_its_user_facing_label():
+	template = TEMPLATE_PATH.read_text()
+	assert "const builtinOpLabels = { speakers: 'Diarize' };" in template
+	assert "builtinOpLabels[op] || op.replace(/_/g, ' ')" in template
+
+
 def test_cached_action_keeps_its_server_resolved_source_filename():
 	template = TEMPLATE_PATH.read_text()
 	assert "filename: data.filename" in _action_source(template)

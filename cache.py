@@ -257,7 +257,7 @@ class Cache:
 				"last_accessed": meta.get("last_accessed", 0),
 				"pinned": bool(meta.get("pinned", False)),
 				"size_mb": round(size_bytes / (1024 * 1024), 3),
-				"has_audio": "audio.mp3" in files,
+				"has_audio": bool({"audio.m4a", "audio.mp3"} & files),
 				"has_transcript": "transcript.txt" in files,
 				"has_summary": "summary.txt" in files,
 				"has_translation": has_translation,

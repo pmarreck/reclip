@@ -579,8 +579,8 @@
 
     <div class="controls">
       <div class="pill-group">
-        <button class="pill active" data-format="video" onclick="setFormat(this)">MP4</button>
-        <button class="pill" data-format="audio" onclick="setFormat(this)">MP3</button>
+        <button class="pill active" data-format="video" onclick="setFormat(this)">Video</button>
+        <button class="pill" data-format="audio" onclick="setFormat(this)">Audio</button>
       </div>
       <button class="fetch-btn" id="goBtn" onclick="go()">Fetch</button>
     </div>
@@ -600,6 +600,9 @@
   <script>
     let currentFormat = 'video';
     let cardData = [];
+    // Keep internal operation/cache IDs stable while presenting the action the
+    // user invoked. `speakers` predates the visible Diarize control.
+    const builtinOpLabels = { speakers: 'Diarize' };
 
     function setFormat(btn) {
       document.querySelectorAll('.pill').forEach(b => b.classList.remove('active'));
@@ -853,7 +856,7 @@
         const opState = c.ops?.[op];
         if (!opState) continue;
         const def_ = actionDefs.find(a => a.id === op);
-        const label = def_ ? def_.name : op.replace(/_/g, ' ');
+        const label = def_ ? def_.name : (builtinOpLabels[op] || op.replace(/_/g, ' '));
         const sourceLabel = opState.filename?.includes('-diarized') ? ' (diarized)' : '';
         if (opState.status === 'processing') {
           opsHtml += `<div class="card-status downloading"><span class="spin"></span> ${label}...</div>`;

@@ -8,6 +8,7 @@ import json
 import subprocess
 import threading
 import time
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_file, render_template, Response
 
 from config import load_config
@@ -138,14 +139,27 @@ def _metadata_header(url):
 
 
 STT_BIAS_PROMPT_MAX_CHARS = 600  # Whisper's prompt window is ~224 tokens
-# YouTube currently permits some progressive MP4s while returning 403 for the
-# corresponding DASH streams. Prefer one self-contained source for speech
-# workflows; retain the adaptive selection for hosts without that format.
+# YouTube currently permits small progressive MP4s while returning 403 for
+# some standalone audio and adaptive DASH streams. Speech workflows do not
+# benefit from video resolution, so fetch the smallest self-contained stream
+# first. This avoids the failing request and unnecessary network/storage cost.
 AUDIO_SOURCE_FORMATS = (
+    "worst[ext=mp4][acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]",
     "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
     "bestvideo+bestaudio/best",
 )
 AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
+VIDEO_DOWNLOAD_FORMAT = AUDIO_SOURCE_FORMATS[1]
+AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3")
+# As of 2026-08, YouTube's default Android-VR client can reject otherwise
+# available speech media with a 403 or require a PO token. The regular Android
+# client still provides a cookie-free progressive stream for this workflow.
+# Keep this scoped to audio acquisition: normal video downloads preserve their
+# current format-selection behavior and may legitimately need higher-quality
+# DASH formats unavailable through the Android client.
+YOUTUBE_AUDIO_EXTRACTOR_ARGS = (
+    "--extractor-args", "youtube:player_client=android",
+)
 DIARIZED_SOURCE = "diarized"
 RAW_SOURCE = "transcript"
 PREFER_DIARIZED_ACTION_IDS = frozenset({
@@ -165,48 +179,113 @@ def _source_files_for_template(out_template):
     return glob.glob(glob_pattern)
 
 
-def _download_audio_from_video_source(url, source_template, audio_path):
-    """Create an MP3 from a progressive source, with adaptive media fallback.
+def _discard_audio_source_files(out_template):
+    """Remove temporary yt-dlp sources for one audio-extraction attempt.
 
-    Direct audio extraction can receive YouTube 403 responses. Prefer a
-    self-contained MP4, then retry the prior adaptive video-plus-audio path
-    for hosts that do not expose a usable progressive source.
+    A failed adaptive download can leave a complete video-only file such as
+    ``audio_source.f401.mp4``. It has no useful audio, but a later glob could
+    select it ahead of a fresh source. These files are transient conversion
+    inputs, never user-visible cache artifacts, so clear them before and after
+    every attempt. The final audio uses a distinct filename and survives.
     """
-    last_error = "Command failed"
-    for source_format in AUDIO_SOURCE_FORMATS:
-        cmd = [
-            "yt-dlp", "--no-playlist", "--no-part", "-f", source_format,
-            "--merge-output-format", "mp4", "-o", source_template, url,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            break
-        last_error = _last_stderr_line(result)
-    else:
-        raise RuntimeError(last_error)
-
-    source_files = [p for p in _source_files_for_template(source_template) if p != audio_path]
-    source_files.sort(key=lambda p: (not p.endswith(".mp4"), p))
-    if not source_files:
-        raise RuntimeError("Audio source download completed but no source file was found")
-
-    source_path = source_files[0]
-    extract_cmd = [
-        "ffmpeg", "-i", source_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2",
-        audio_path, "-y",
-    ]
-    result = subprocess.run(extract_cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        raise RuntimeError(_last_stderr_line(result))
-    if not os.path.isfile(audio_path):
-        raise RuntimeError("Audio extraction completed but no mp3 file was found")
-
-    for path in source_files:
+    for path in _source_files_for_template(out_template):
         try:
             os.remove(path)
         except OSError:
             pass
-    return audio_path
+
+
+def _youtube_audio_extractor_args(url):
+    """Select the cookie-free YouTube client only for YouTube audio sources."""
+    host = (urlparse(url).hostname or "").lower()
+    if host == "youtu.be" or host == "youtube.com" or host.endswith(".youtube.com"):
+        return YOUTUBE_AUDIO_EXTRACTOR_ARGS
+    return ()
+
+
+def _cached_audio_path(url):
+    """Return the preferred cached audio artifact, including legacy MP3s."""
+    for filename in AUDIO_CACHE_FILENAMES:
+        if cache.has_file(url, filename):
+            return cache.entry_path(url, filename)
+    return None
+
+
+def _remove_incomplete_file(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _extract_audio_track(source_path, preferred_path):
+    """Extract audio without quality loss, transcoding only as a fallback.
+
+    YouTube's progressive MP4 normally contains AAC, which can be copied into
+    M4A without decoding and re-encoding. Stream copy is faster and preserves
+    the exact source quality. A few non-YouTube sources use codecs that M4A
+    cannot contain; only those fall back to a broadly supported MP3 artifact.
+    """
+    fallback_path = os.path.splitext(preferred_path)[0] + ".mp3"
+    _remove_incomplete_file(preferred_path)
+    copy_cmd = [
+        "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn", "-c:a", "copy",
+        preferred_path, "-y",
+    ]
+    result = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode == 0 and os.path.isfile(preferred_path):
+        return preferred_path
+
+    _remove_incomplete_file(preferred_path)
+    _remove_incomplete_file(fallback_path)
+    transcode_cmd = [
+        "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn",
+        "-acodec", "libmp3lame", "-q:a", "2", fallback_path, "-y",
+    ]
+    result = subprocess.run(transcode_cmd, capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(_last_stderr_line(result))
+    if not os.path.isfile(fallback_path):
+        raise RuntimeError("Audio extraction completed but no audio file was found")
+    return fallback_path
+
+
+def _download_audio_from_video_source(url, source_template, audio_path):
+    """Create an audio artifact from a small progressive video source.
+
+    Direct audio and adaptive downloads can receive YouTube 403 responses.
+    Prefer the lowest-bitrate self-contained video and losslessly remux its
+    audio; retain broader source fallbacks for other extractors.
+    """
+    _discard_audio_source_files(source_template)
+    try:
+        last_error = "Command failed"
+        for source_format in AUDIO_SOURCE_FORMATS:
+            cmd = [
+                "yt-dlp", "--no-playlist", "--no-part",
+                *_youtube_audio_extractor_args(url),
+                "-f", source_format, "--merge-output-format", "mp4", "-o", source_template, url,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0:
+                break
+            last_error = _last_stderr_line(result)
+        else:
+            raise RuntimeError(last_error)
+
+        fallback_path = os.path.splitext(audio_path)[0] + ".mp3"
+        source_files = [
+            p for p in _source_files_for_template(source_template)
+            if p not in (audio_path, fallback_path)
+        ]
+        source_files.sort(key=lambda p: (not p.endswith(".mp4"), p))
+        if not source_files:
+            raise RuntimeError("Audio source download completed but no source file was found")
+
+        source_path = source_files[0]
+        return _extract_audio_track(source_path, audio_path)
+    finally:
+        _discard_audio_source_files(source_template)
 
 
 def _stt_bias_prompt(meta, explicit_prompt, enabled):
@@ -224,12 +303,13 @@ def _stt_bias_prompt(meta, explicit_prompt, enabled):
 
 
 def _ensure_audio(url):
-    """Ensure audio.mp3 exists in cache. Downloads via yt-dlp if needed."""
-    if cache.has_file(url, "audio.mp3"):
-        return cache.entry_path(url, "audio.mp3")
+    """Ensure a reusable audio artifact exists in cache."""
+    existing = _cached_audio_path(url)
+    if existing:
+        return existing
     # Fetch metadata before downloading (cheap, and useful later)
     _fetch_and_cache_metadata(url)
-    audio_path = cache.entry_path(url, "audio.mp3")
+    audio_path = cache.entry_path(url, "audio.m4a")
     return _download_audio_from_video_source(
         url, cache.entry_path(url, "audio_source.%(ext)s"), audio_path
     )
@@ -442,16 +522,20 @@ def run_download(job_id, url, format_choice, format_id):
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
     try:
+        audio_output = None
         if format_choice == "audio":
-            _download_audio_from_video_source(
-                url, out_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.mp3")
+            # Keep transient video sources under a separate basename: cleanup
+            # must never match and delete the final user-facing audio artifact.
+            source_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.source.%(ext)s")
+            audio_output = _download_audio_from_video_source(
+                url, source_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.m4a")
             )
         else:
             cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
             if format_id:
                 cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
             else:
-                cmd += ["-f", AUDIO_SOURCE_FORMAT, "--merge-output-format", "mp4"]
+                cmd += ["-f", VIDEO_DOWNLOAD_FORMAT, "--merge-output-format", "mp4"]
             cmd.append(url)
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
@@ -467,8 +551,7 @@ def run_download(job_id, url, format_choice, format_id):
             return
 
         if format_choice == "audio":
-            target = [f for f in files if f.endswith(".mp3")]
-            chosen = target[0] if target else files[0]
+            chosen = audio_output
         else:
             target = [f for f in files if f.endswith(".mp4")]
             chosen = target[0] if target else files[0]
@@ -494,18 +577,13 @@ def run_download(job_id, url, format_choice, format_id):
         # Cache the downloaded file (best-effort — failures must not break the download)
         try:
             if format_choice == "audio":
-                cache.write_file(url, "audio.mp3", chosen)
+                audio_cache_name = "audio.m4a" if chosen.endswith(".m4a") else "audio.mp3"
+                cache.write_file(url, audio_cache_name, chosen)
             else:
                 cache.write_file(url, "video.mp4", chosen)
                 # Also extract and cache audio for future transcription use
-                audio_cache_path = cache.entry_path(url, "audio.mp3")
-                if not os.path.isfile(audio_cache_path):
-                    extract_cmd = [
-                        "ffmpeg", "-i", chosen,
-                        "-vn", "-acodec", "libmp3lame", "-q:a", "2",
-                        audio_cache_path, "-y",
-                    ]
-                    subprocess.run(extract_cmd, capture_output=True, timeout=120)
+                if not _cached_audio_path(url):
+                    _extract_audio_track(chosen, cache.entry_path(url, "audio.m4a"))
             import time as _time
             cache._write_meta(url, {
                 "url": url,
@@ -1397,7 +1475,8 @@ def _resolve_voice_reference(url):
 
     Returns (path, text) or ("", "") if a reference can't be produced.
     """
-    if not cache.has_file(url, "audio.mp3"):
+    audio_path = _cached_audio_path(url)
+    if not audio_path:
         return ("", "")
 
     voice_clip = cache.entry_path(url, "voice_sample.wav")
@@ -1405,7 +1484,6 @@ def _resolve_voice_reference(url):
 
     # Extract clip if missing
     if not os.path.isfile(voice_clip):
-        audio_path = cache.entry_path(url, "audio.mp3")
         try:
             probe = subprocess.run(
                 ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",

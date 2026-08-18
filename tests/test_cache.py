@@ -183,14 +183,15 @@ class TestListEntries:
 		titles = [e["title"] for e in entries]
 		assert titles == ["Newest", "Middle", "Oldest"]
 
-	def test_entry_includes_what_is_cached(self, tmp_cache):
+	@pytest.mark.parametrize("audio_filename", ["audio.m4a", "audio.mp3"])
+	def test_entry_includes_what_is_cached(self, tmp_cache, audio_filename):
 		"""Each entry exposes presence flags so the UI knows which buttons to show."""
 		from cache import Cache
 		c = Cache(str(tmp_cache), max_mb=10)
 		url = "https://example.com/v"
 		c.write_text(url, "transcript.txt", "T", meta={"url": url, "title": "Vid"})
 		c.write_text(url, "summary.txt", "S")
-		c.write_text(url, "audio.mp3", "AAA")
+		c.write_text(url, audio_filename, "AAA")
 
 		entries = c.list_entries()
 		assert len(entries) == 1
