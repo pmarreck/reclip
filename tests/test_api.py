@@ -217,8 +217,10 @@ class TestTranscribeEndpoint:
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.m4a")
-        yt_dlp_cmd = calls[0]
-        ffmpeg_cmd = calls[1]
+        yt_dlp_cmd = next(
+            cmd for cmd in calls if cmd[0] == "yt-dlp" and "--simulate" not in cmd
+        )
+        ffmpeg_cmd = next(cmd for cmd in calls if cmd[0] == "ffmpeg")
         assert "-x" not in yt_dlp_cmd
         assert "-f" in yt_dlp_cmd
         assert yt_dlp_cmd[yt_dlp_cmd.index("-f") + 1] == app.AUDIO_SOURCE_FORMAT
@@ -231,6 +233,88 @@ class TestTranscribeEndpoint:
             ffmpeg_cmd.index("-c:a"):ffmpeg_cmd.index("-c:a") + 2
         ]
         assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.m4a")
+
+    def test_ensure_audio_inspects_codec_metadata_before_transfer(self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=codecprobe"
+        calls = []
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata", lambda u: {})
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                R.stdout = json.dumps({
+                    "format_id": "18",
+                    "ext": "mp4",
+                    "vcodec": "avc1.42001E",
+                    "acodec": "mp4a.40.2",
+                })
+            elif cmd[0] == "yt-dlp":
+                source_path = app.cache.entry_path(url, "audio_source.mp4")
+                os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                with open(source_path, "wb") as f:
+                    f.write(b"fake mp4 data")
+            else:
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"fake remuxed audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.m4a")
+        assert calls[0][0] == "yt-dlp"
+        assert "--simulate" in calls[0]
+        assert "-j" in calls[0]
+        assert calls[1][0] == "yt-dlp"
+        assert "--simulate" not in calls[1]
+
+    def test_ensure_audio_known_incompatible_codec_skips_m4a_copy(self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://example.com/opus-video"
+        calls = []
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata", lambda u: {})
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                R.stdout = json.dumps({
+                    "format_id": "webm-low",
+                    "ext": "webm",
+                    "vcodec": "vp9",
+                    "acodec": "opus",
+                })
+            elif cmd[0] == "yt-dlp":
+                source_path = app.cache.entry_path(url, "audio_source.webm")
+                os.makedirs(os.path.dirname(source_path), exist_ok=True)
+                with open(source_path, "wb") as f:
+                    f.write(b"fake webm data")
+            elif "copy" in cmd:
+                pytest.fail("known Opus metadata should bypass the M4A copy attempt")
+            else:
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"fake transcoded audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.mp3")
+        ffmpeg_calls = [cmd for cmd in calls if cmd[0] == "ffmpeg"]
+        assert len(ffmpeg_calls) == 1
+        assert "libmp3lame" in ffmpeg_calls[0]
 
     def test_ensure_audio_prefers_progressive_source_then_retries_adaptive(self, tmp_cache, monkeypatch):
         import app
@@ -274,12 +358,19 @@ class TestTranscribeEndpoint:
         monkeypatch.setattr(subprocess, "run", mock_run)
 
         assert app._ensure_audio(url) == app.cache.entry_path(url, "audio.m4a")
-        yt_dlp_calls = [cmd for cmd in calls if cmd[0] == "yt-dlp"]
-        assert [cmd[cmd.index("-f") + 1] for cmd in yt_dlp_calls] == [
+        probe_calls = [
+            cmd for cmd in calls if cmd[0] == "yt-dlp" and "--simulate" in cmd
+        ]
+        assert [cmd[cmd.index("-f") + 1] for cmd in probe_calls] == [
             "worst[ext=mp4][acodec!=none][vcodec!=none]/worst[acodec!=none][vcodec!=none]",
             "best[ext=mp4][acodec!=none][vcodec!=none]/best[acodec!=none][vcodec!=none]",
             "bestvideo+bestaudio/best",
         ]
+        download_calls = [
+            cmd for cmd in calls if cmd[0] == "yt-dlp" and "--simulate" not in cmd
+        ]
+        assert len(download_calls) == 1
+        assert download_calls[0][download_calls[0].index("-f") + 1] == "bestvideo+bestaudio/best"
 
     def test_ensure_audio_transcodes_only_when_stream_copy_fails(self, tmp_cache, monkeypatch):
         import app
@@ -635,6 +726,18 @@ class TestDownloadCaching:
     def _make_mock_run(self, job_id, download_dir, format_choice="video"):
         """Return a mock subprocess.run that creates a fake downloaded file."""
         def mock_run(cmd, *args, **kwargs):
+            if cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                class FakeProbeResult:
+                    returncode = 0
+                    stdout = json.dumps({
+                        "format_id": "18",
+                        "ext": "mp4",
+                        "vcodec": "avc1",
+                        "acodec": "mp4a.40.2",
+                    })
+                    stderr = ""
+                return FakeProbeResult()
+
             # If this is an ffmpeg audio extraction call, create a fake audio file
             if cmd[0] == "ffmpeg":
                 audio_out = cmd[-2]  # second-to-last arg is the output path
@@ -678,6 +781,79 @@ class TestDownloadCaching:
         assert app.jobs[job_id]["status"] == "done"
         assert app.cache.has_file(url, "video.mp4"), "video.mp4 should be cached after video download"
 
+    def test_redgifs_video_download_falls_back_when_codecs_are_unknown(
+            self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://redgifs.com/watch/foolishforkedabyssiniancat"
+        job_id = "redgifs001"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "RedGifs"}
+        calls = []
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "yt-dlp":
+                selector = cmd[cmd.index("-f") + 1]
+                if selector.split("/")[-1] != "best":
+                    R.returncode = 1
+                    R.stderr = "ERROR: Requested format is not available"
+                    return R()
+                out_template = cmd[cmd.index("-o") + 1]
+                with open(out_template.replace("%(ext)s", "mp4"), "wb") as f:
+                    f.write(b"redgifs mp4")
+            else:
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"redgifs audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert calls[0][calls[0].index("-f") + 1].split("/")[-1] == "best"
+
+    def test_selected_combined_video_format_falls_back_before_best(
+            self, client, tmp_cache, monkeypatch):
+        """A RedGifs `sd` choice already contains audio and needs no merge."""
+        import app
+
+        url = "https://redgifs.com/watch/foolishforkedabyssiniancat"
+        job_id = "redgifssd01"
+        app.jobs[job_id] = {"status": "downloading", "url": url, "title": "RedGifs SD"}
+        calls = []
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "yt-dlp":
+                out_template = cmd[cmd.index("-o") + 1]
+                with open(out_template.replace("%(ext)s", "mp4"), "wb") as f:
+                    f.write(b"redgifs sd mp4")
+            else:
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"redgifs audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        app.run_download(job_id, url, "video", "sd")
+
+        selector = calls[0][calls[0].index("-f") + 1]
+        assert app.jobs[job_id]["status"] == "done"
+        assert selector == "sd+bestaudio/sd/best"
+
     def test_video_download_also_extracts_audio(self, client, tmp_cache, monkeypatch):
         import app
 
@@ -716,7 +892,18 @@ class TestDownloadCaching:
 
         def mock_run(cmd, *args, **kwargs):
             calls.append(cmd)
-            if cmd[0] == "yt-dlp":
+            if cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                class ProbeResult:
+                    returncode = 0
+                    stdout = json.dumps({
+                        "format_id": "18",
+                        "ext": "mp4",
+                        "vcodec": "avc1",
+                        "acodec": "mp4a.40.2",
+                    })
+                    stderr = ""
+                return ProbeResult()
+            elif cmd[0] == "yt-dlp":
                 out_template = cmd[cmd.index("-o") + 1]
                 fake_file = out_template.replace("%(ext)s", "mp4")
                 with open(fake_file, "wb") as f:
@@ -735,8 +922,10 @@ class TestDownloadCaching:
 
         app.run_download(job_id, url, "audio", None)
 
-        yt_dlp_cmd = calls[0]
-        ffmpeg_cmd = calls[1]
+        yt_dlp_cmd = next(
+            cmd for cmd in calls if cmd[0] == "yt-dlp" and "--simulate" not in cmd
+        )
+        ffmpeg_cmd = next(cmd for cmd in calls if cmd[0] == "ffmpeg")
         assert app.jobs[job_id]["status"] == "done"
         assert "-x" not in yt_dlp_cmd
         assert "-f" in yt_dlp_cmd
@@ -1121,6 +1310,68 @@ class TestImageInfoFlow:
         # And the existing fields are still present
         assert "title" in data
         assert "formats" in data
+
+    def test_info_keeps_dimensioned_mp4_formats_when_codecs_are_unknown(
+            self, client, monkeypatch):
+        """RedGifs reports codec fields as 'none' despite serving real MP4s."""
+        fake_yt_output = json.dumps({
+            "title": "RedGifs clip",
+            "duration": 12,
+            "formats": [
+                {
+                    "format_id": "sd", "ext": "mp4", "width": 853,
+                    "height": 480, "vcodec": "none", "acodec": "none",
+                },
+                {
+                    "format_id": "hd", "ext": "mp4", "width": 1920,
+                    "height": 1080, "vcodec": "none", "acodec": "none",
+                },
+            ],
+        })
+
+        def mock_run(cmd, *args, **kwargs):
+            class R:
+                returncode = 0
+                stdout = fake_yt_output
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        resp = client.post("/api/info", json={
+            "url": "https://redgifs.com/watch/foolishforkedabyssiniancat",
+        })
+
+        assert resp.status_code == 200
+        assert resp.get_json()["formats"] == [
+            {"id": "hd", "label": "1080p", "height": 1080},
+            {"id": "sd", "label": "480p", "height": 480},
+        ]
+
+    def test_video_format_classifier_handles_mixed_format_set(self):
+        import app
+
+        formats = {
+            "unknown_mp4": {
+                "ext": "mp4", "height": 480, "vcodec": "none", "acodec": "none",
+            },
+            "known_webm": {
+                "ext": "webm", "height": 720, "vcodec": "vp9", "acodec": "opus",
+            },
+            "audio_only": {
+                "ext": "m4a", "height": None, "vcodec": "none", "acodec": "aac",
+            },
+            "dimensioned_image": {
+                "ext": "jpg", "height": 1080, "vcodec": "none", "acodec": "none",
+            },
+        }
+
+        classified = {
+            name for name, metadata in formats.items()
+            if app._format_has_video(metadata)
+        }
+
+        assert classified == {"unknown_mp4", "known_webm"}
 
 
 class TestMediaServe:

@@ -1,5 +1,23 @@
 # PLAN
 
+## Completed: Codec metadata preflight and RedGifs regression (2026-08-18)
+- [x] Inspect the selected audio source's yt-dlp metadata before payload
+      transfer and use its audio codec to choose lossless M4A remux versus MP3
+      transcode; preserve the existing guarded fallback when an extractor
+      reports no codec. Curiosity poke: metadata can be missing or wrong, so an
+      unknown codec must not prevent the proven ffmpeg fallback from running.
+      Completed 2026-08-18 12:50 EDT: live probes reported `mp4a.40.2` for
+      YouTube and unknown for RedGifs; the latter still remuxed successfully.
+- [x] Restore RedGifs downloads when its yt-dlp formats have dimensions but
+      report unknown codecs, without weakening the progressive-video workaround
+      used for YouTube transcription audio. Curiosity poke: both default video
+      download and audio extraction need an unfiltered non-YouTube fallback,
+      while quality choices should still expose RedGifs `sd` and `hd` formats.
+      Completed 2026-08-18 12:50 EDT: live default-video and audio downloads
+      succeeded against gallery-dl's upstream RedGifs fixture; ffprobe confirmed
+      H.264/AAC video and the losslessly remuxed AAC audio artifact. Full suite:
+      379 passed; `nix build` passed.
+
 ## Completed: Audio acquisition and diarization wording (2026-08-18)
 - [x] Use YouTube's cookie-free Android player client to download the smallest
       progressive video-with-audio, then stream-copy AAC into a cached M4A;
@@ -25,10 +43,10 @@
 ## Next: RAM-first audio acquisition (2026-08-18)
 - [ ] Replace the temporary progressive-video file with a direct `yt-dlp`
       stdout to `ffmpeg` stdin pipe, leaving only the final cached audio on disk.
-      Prefer `yt-dlp --simulate --print` codec metadata before transfer; use a
-      short `--download-sections` sample only when an extractor omits or
-      misreports codec compatibility. Curiosity poke: a failed M4A stream copy
-      consumes the pipe, so the rare MP3 fallback must deliberately redownload.
+      Reuse the shipped metadata preflight; use a short `--download-sections`
+      sample only when an extractor omits or misreports codec compatibility.
+      Curiosity poke: a failed M4A stream copy consumes the pipe, so the rare
+      MP3 fallback must deliberately redownload.
 
 ## Active: Nix evaluation health (2026-08-17)
 - [x] Replace the deprecated Darwin platform predicate in the flake and verify

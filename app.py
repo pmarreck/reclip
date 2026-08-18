@@ -149,8 +149,14 @@ AUDIO_SOURCE_FORMATS = (
     "bestvideo+bestaudio/best",
 )
 AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
-VIDEO_DOWNLOAD_FORMAT = AUDIO_SOURCE_FORMATS[1]
+# Some extractors, notably RedGifs, expose dimensioned MP4s while reporting
+# both codecs as unknown. Preserve the preferred known-codec choices, then let
+# yt-dlp select its best format when those metadata filters cannot match.
+VIDEO_DOWNLOAD_FORMAT = f"{AUDIO_SOURCE_FORMATS[1]}/best"
 AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3")
+M4A_COPY_CODEC_PREFIXES = ("aac", "mp4a")
+M4A_COPY_CODECS = frozenset({"alac"})
+VIDEO_EXTENSIONS = frozenset({"3gp", "flv", "m4v", "mkv", "mov", "mp4", "webm"})
 # As of 2026-08, YouTube's default Android-VR client can reject otherwise
 # available speech media with a 403 or require a PO token. The regular Android
 # client still provides a cookie-free progressive stream for this workflow.
@@ -203,6 +209,23 @@ def _youtube_audio_extractor_args(url):
     return ()
 
 
+def _audio_source_formats(url):
+    """Return source selectors without weakening YouTube's 403 workaround.
+
+    Non-YouTube extractors may omit codec metadata for valid combined media.
+    Their final unfiltered fallbacks let yt-dlp choose a real source; YouTube
+    deliberately keeps the known progressive-video constraint so it does not
+    regress to the standalone audio streams that triggered the original 403s.
+    """
+    if _youtube_audio_extractor_args(url):
+        return AUDIO_SOURCE_FORMATS
+    return (
+        f"{AUDIO_SOURCE_FORMATS[0]}/worst",
+        f"{AUDIO_SOURCE_FORMATS[1]}/best",
+        AUDIO_SOURCE_FORMATS[2],
+    )
+
+
 def _cached_audio_path(url):
     """Return the preferred cached audio artifact, including legacy MP3s."""
     for filename in AUDIO_CACHE_FILENAMES:
@@ -218,23 +241,80 @@ def _remove_incomplete_file(path):
         pass
 
 
-def _extract_audio_track(source_path, preferred_path):
+def _normalized_codec(codec):
+    """Normalize yt-dlp's missing-codec sentinels to an unknown value."""
+    value = str(codec or "").strip().lower()
+    if value in ("", "na", "n/a", "none", "null", "unknown"):
+        return None
+    return value
+
+
+def _audio_codec_from_metadata(info):
+    """Find the selected audio codec in yt-dlp's top-level or merged metadata."""
+    candidates = []
+    for key in ("requested_downloads", "requested_formats"):
+        value = info.get(key) or []
+        if isinstance(value, list):
+            candidates.extend(value)
+    candidates.append(info)
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        codec = _normalized_codec(candidate.get("acodec"))
+        if codec:
+            return codec
+    return None
+
+
+def _inspect_audio_source(url, source_format):
+    """Resolve a source format and audio codec without transferring media.
+
+    This metadata-only yt-dlp pass lets the extraction stage avoid a known-bad
+    M4A stream copy. Extractors that omit codec fields return ``None`` so the
+    proven ffmpeg copy-then-transcode fallback remains authoritative.
+    """
+    cmd = [
+        "yt-dlp", "--no-playlist", "--simulate", "-j",
+        *_youtube_audio_extractor_args(url),
+        "-f", source_format, url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        raise RuntimeError(_last_stderr_line(result))
+    try:
+        info = parse_ytdlp_json(result.stdout)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return _audio_codec_from_metadata(info)
+
+
+def _codec_can_copy_to_m4a(codec):
+    """Classify known codecs for lossless M4A remux; unknown stays undecided."""
+    codec = _normalized_codec(codec)
+    if codec is None:
+        return None
+    return codec in M4A_COPY_CODECS or codec.startswith(M4A_COPY_CODEC_PREFIXES)
+
+
+def _extract_audio_track(source_path, preferred_path, audio_codec=None):
     """Extract audio without quality loss, transcoding only as a fallback.
 
     YouTube's progressive MP4 normally contains AAC, which can be copied into
     M4A without decoding and re-encoding. Stream copy is faster and preserves
-    the exact source quality. A few non-YouTube sources use codecs that M4A
-    cannot contain; only those fall back to a broadly supported MP3 artifact.
+    the exact source quality. Metadata-known incompatible codecs skip directly
+    to MP3; unknown codecs still try stream copy because extractors such as
+    RedGifs can report ``none`` for a valid AAC-bearing MP4.
     """
     fallback_path = os.path.splitext(preferred_path)[0] + ".mp3"
     _remove_incomplete_file(preferred_path)
-    copy_cmd = [
-        "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn", "-c:a", "copy",
-        preferred_path, "-y",
-    ]
-    result = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode == 0 and os.path.isfile(preferred_path):
-        return preferred_path
+    if _codec_can_copy_to_m4a(audio_codec) is not False:
+        copy_cmd = [
+            "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn", "-c:a", "copy",
+            preferred_path, "-y",
+        ]
+        result = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0 and os.path.isfile(preferred_path):
+            return preferred_path
 
     _remove_incomplete_file(preferred_path)
     _remove_incomplete_file(fallback_path)
@@ -260,7 +340,13 @@ def _download_audio_from_video_source(url, source_template, audio_path):
     _discard_audio_source_files(source_template)
     try:
         last_error = "Command failed"
-        for source_format in AUDIO_SOURCE_FORMATS:
+        selected_codec = None
+        for source_format in _audio_source_formats(url):
+            try:
+                selected_codec = _inspect_audio_source(url, source_format)
+            except RuntimeError as e:
+                last_error = str(e)
+                continue
             cmd = [
                 "yt-dlp", "--no-playlist", "--no-part",
                 *_youtube_audio_extractor_args(url),
@@ -283,7 +369,7 @@ def _download_audio_from_video_source(url, source_template, audio_path):
             raise RuntimeError("Audio source download completed but no source file was found")
 
         source_path = source_files[0]
-        return _extract_audio_track(source_path, audio_path)
+        return _extract_audio_track(source_path, audio_path, selected_codec)
     finally:
         _discard_audio_source_files(source_template)
 
@@ -533,7 +619,13 @@ def run_download(job_id, url, format_choice, format_id):
         else:
             cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
             if format_id:
-                cmd += ["-f", f"{format_id}+bestaudio/best", "--merge-output-format", "mp4"]
+                # A selected format may already be a combined stream (RedGifs
+                # `sd`/`hd`). Try the merge first, then that exact format,
+                # before allowing yt-dlp's broad best-format fallback.
+                cmd += [
+                    "-f", f"{format_id}+bestaudio/{format_id}/best",
+                    "--merge-output-format", "mp4",
+                ]
             else:
                 cmd += ["-f", VIDEO_DOWNLOAD_FORMAT, "--merge-output-format", "mp4"]
             cmd.append(url)
@@ -849,6 +941,20 @@ def download_all(entry_hash):
     )
 
 
+def _format_has_video(fmt):
+    """Recognize video formats even when an extractor cannot name the codec.
+
+    A positive height plus a video container is reliable enough for quality
+    selection when yt-dlp reports ``vcodec=none`` for direct MP4 URLs, as its
+    RedGifs extractor currently does.
+    """
+    if not fmt.get("height"):
+        return False
+    codec = _normalized_codec(fmt.get("vcodec"))
+    extension = str(fmt.get("ext") or "").lower()
+    return codec is not None or extension in VIDEO_EXTENSIONS
+
+
 def _video_info(url):
     """Fetch and normalize yt-dlp metadata for the web card and CLI display."""
     cmd = ["yt-dlp", "--no-playlist", "-j", url]
@@ -874,7 +980,7 @@ def _video_info(url):
     # Use the first entry with video formats, or fall back to the first entry.
     info = entries[0]
     for entry in entries:
-        if any(f.get("height") for f in entry.get("formats", [])):
+        if any(_format_has_video(f) for f in entry.get("formats", [])):
             info = entry
             break
 
@@ -882,7 +988,7 @@ def _video_info(url):
     best_by_height = {}
     for f in info.get("formats", []):
         height = f.get("height")
-        if height and f.get("vcodec", "none") != "none":
+        if _format_has_video(f):
             tbr = f.get("tbr") or 0
             if height not in best_by_height or tbr > (best_by_height[height].get("tbr") or 0):
                 best_by_height[height] = f
