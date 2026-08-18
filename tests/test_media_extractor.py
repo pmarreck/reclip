@@ -219,7 +219,8 @@ class TestFetchImages:
             i = cmd.index("--cookies")
             assert cmd[i + 1] == cookies_path
 
-    def test_fetch_images_passes_cookies_from_browser(self, tmp_path):
+    @pytest.mark.parametrize("browser", ["firefox", "chrome", "safari"])
+    def test_fetch_images_passes_cookies_from_browser(self, tmp_path, browser):
         """When cookies_from_browser is provided, gallery-dl is invoked with
         --cookies-from-browser <name>."""
         from media_extractor import fetch_images
@@ -238,14 +239,14 @@ class TestFetchImages:
             "https://www.instagram.com/p/abc/",
             str(tmp_path / "out"),
             runner=fake_runner,
-            cookies_from_browser="firefox",
+            cookies_from_browser=browser,
         )
 
         assert len(calls) >= 1
         for cmd in calls:
             assert "--cookies-from-browser" in cmd
             i = cmd.index("--cookies-from-browser")
-            assert cmd[i + 1] == "firefox"
+            assert cmd[i + 1] == browser
 
     def test_fetch_images_no_auth_args_when_unset(self, tmp_path):
         """No auth flags should appear if neither cookies nor browser is set."""
@@ -322,9 +323,55 @@ class TestFetchImages:
 
         with pytest.raises(RuntimeError) as exc:
             dump_images("https://www.instagram.com/p/abc/", runner=fake_runner)
-        msg = str(exc.value).lower()
-        assert "login" in msg or "auth" in msg
-        assert "cookie" in msg or "RECLIP_GALLERY_DL" in str(exc.value)
+        msg = str(exc.value)
+        assert msg.startswith("Gallery authentication required:")
+        assert "instagram.com" in msg
+        assert "Firefox, Chrome, or Safari" in msg
+        assert "RECLIP_GALLERY_DL_BROWSER" in msg
+
+    def test_auth_error_names_configured_browser_without_usable_login(self):
+        from media_extractor import dump_images
+
+        def fake_runner(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "[instagram][error] HTTP Error 403: Forbidden"
+            return R()
+
+        with pytest.raises(RuntimeError) as exc:
+            dump_images(
+                "https://www.instagram.com/p/abc/",
+                runner=fake_runner,
+                cookies_from_browser="chrome",
+            )
+
+        msg = str(exc.value)
+        assert msg.startswith("Gallery authentication required:")
+        assert "Chrome" in msg
+        assert "not logged in" in msg
+
+    def test_browser_cookie_database_error_explains_configuration(self):
+        from media_extractor import dump_images
+
+        def fake_runner(cmd, **kwargs):
+            class R:
+                returncode = 1
+                stdout = ""
+                stderr = "[cookies][error] Unable to find Firefox cookies database"
+            return R()
+
+        with pytest.raises(RuntimeError) as exc:
+            dump_images(
+                "https://www.instagram.com/p/abc/",
+                runner=fake_runner,
+                cookies_from_browser="firefox",
+            )
+
+        msg = str(exc.value)
+        assert msg.startswith("Gallery authentication required:")
+        assert "Firefox" in msg
+        assert "profile" in msg
 
     def test_fetch_images_flattens_subdirs(self, tmp_path):
         """gallery-dl writes to <dest>/<extractor>/<owner>/ by default. We pass

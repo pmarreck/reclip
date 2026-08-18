@@ -41,7 +41,8 @@ RECLIP_CACHE_MAX_MB=${RECLIP_CACHE_MAX_MB:-1024}
 #   a) read a cookies.txt (Netscape format) — set RECLIP_GALLERY_DL_COOKIES
 #   b) extract cookies live from a browser profile — set RECLIP_GALLERY_DL_BROWSER
 #      to one of: firefox, chromium, chrome, safari, edge, vivaldi, opera, brave
-# (a) wins if both are set. The default below picks a sensible browser per OS.
+# (a) wins if both are set. Browser-cookie access is disabled by default and
+# must be opted into explicitly; plain "firefox" searches all Firefox profiles.
 # SECURITY: when RECLIP_HOST is non-loopback (e.g. 0.0.0.0 for Tailscale),
 # anyone who can reach this server can trigger fetches that ride your session
 # cookies to scrape on your behalf. They cannot read the cookies, but they
@@ -204,18 +205,6 @@ def _default_cache_dir():
 	return os.path.join(os.path.expanduser("~"), ".cache", "reclip")
 
 
-def _default_browser_for_cookies():
-	"""Default browser for gallery-dl cookie extraction.
-
-	Firefox across all platforms — works without OS-level permission prompts
-	(Safari needs Full Disk Access; Chrome on Linux uses kwallet/secret-service).
-	gallery-dl accepts 'chromium:/path/to/profile' for Chromium-derivatives like
-	ChatGPT Atlas; users wanting that should override RECLIP_GALLERY_DL_BROWSER.
-	Returns the gallery-dl browser-name string or "" to mean "no auth".
-	"""
-	return "firefox"
-
-
 _FALSY = {"0", "false", "no", "off", ""}
 
 
@@ -319,6 +308,21 @@ class Config:
 				return v
 			return default
 
+		def get_allow_empty(key, default=""):
+			"""Honor an explicit blank for credential-bearing settings.
+
+			The generic getter treats blank as absent, which is convenient for model
+			defaults but unsafe for browser-cookie extraction: a blank config value
+			must be able to override a service environment value and disable access.
+			"""
+			if key in raw:
+				return raw[key]
+			if key in os.environ:
+				return os.environ[key]
+			if key in secrets_raw:
+				return secrets_raw[key]
+			return default
+
 		cache_dir = get("RECLIP_CACHE_DIR") or _default_cache_dir()
 		try:
 			cache_max_mb = int(get("RECLIP_CACHE_MAX_MB", "1024"))
@@ -328,14 +332,15 @@ class Config:
 			host_port = int(get("RECLIP_PORT", "8899"))
 		except ValueError:
 			host_port = 8899
+		gallery_dl_cookies = get_allow_empty("RECLIP_GALLERY_DL_COOKIES")
 
 		self._values = {
 			"host": get("RECLIP_HOST", "127.0.0.1"),
 			"port": host_port,
 			"cache_dir": os.path.expanduser(cache_dir),
 			"cache_max_mb": cache_max_mb,
-			"gallery_dl_cookies": os.path.expanduser(get("RECLIP_GALLERY_DL_COOKIES")) if get("RECLIP_GALLERY_DL_COOKIES") else "",
-			"gallery_dl_browser": get("RECLIP_GALLERY_DL_BROWSER", _default_browser_for_cookies()),
+			"gallery_dl_cookies": os.path.expanduser(gallery_dl_cookies) if gallery_dl_cookies else "",
+			"gallery_dl_browser": get_allow_empty("RECLIP_GALLERY_DL_BROWSER"),
 			"stt_url": get("RECLIP_STT_URL", "http://localhost:8000/v1/audio/transcriptions"),
 			"stt_api_key": get("RECLIP_STT_API_KEY"),
 			"stt_model": get("RECLIP_STT_MODEL", "whisper-large-v3-turbo-8bit"),

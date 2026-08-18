@@ -1,5 +1,9 @@
 # MISTAKES
 
+- **2026-08-18: Chained repository state changes in one shell command.** I ran
+  `git add ... && git commit ...` despite the instruction to keep commands
+  separate. Use one tool invocation per state-changing Git command so each
+  result is independently visible and failures cannot hide intermediate state.
 - **2026-06-12: Regex block-deletion ate neighboring functions — TWICE in one
   session.** Deleting "from `def X` to the next `def`" consumed the
   `@app.route("/")` decorator of the *following* function (turning / into a

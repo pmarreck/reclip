@@ -13,17 +13,22 @@
       Curiosity poke: retain internal operation/cache identifiers so existing
       API, TTS, and cached result handling remains compatible.
 
-## Next: Configurable gallery authentication (2026-08-18)
-- [ ] Make gallery-dl browser-cookie extraction configurable for Firefox,
+## Completed: Configurable gallery authentication (2026-08-18)
+- [x] Make gallery-dl browser-cookie extraction configurable for Firefox,
       Chrome, and Safari; surface clear UI errors when the site requires a
       login or the selected browser lacks usable site authentication.
+      Browser-cookie access is opt-in for fresh configurations, and an explicit
+      blank overrides a service environment value. Completed 2026-08-18 09:09 EDT.
       Curiosity poke: browser-cookie access must remain opt-in when the server
       is reachable off-loopback, and video/yt-dlp requests must not inherit it.
+
+## Next: RAM-first audio acquisition (2026-08-18)
 - [ ] Replace the temporary progressive-video file with a direct `yt-dlp`
       stdout to `ffmpeg` stdin pipe, leaving only the final cached audio on disk.
-      Curiosity poke: a failed M4A stream copy consumes the pipe, so the rare
-      MP3 fallback must deliberately redownload or inspect codec compatibility
-      before starting the transfer.
+      Prefer `yt-dlp --simulate --print` codec metadata before transfer; use a
+      short `--download-sections` sample only when an extractor omits or
+      misreports codec compatibility. Curiosity poke: a failed M4A stream copy
+      consumes the pipe, so the rare MP3 fallback must deliberately redownload.
 
 ## Active: Nix evaluation health (2026-08-17)
 - [x] Replace the deprecated Darwin platform predicate in the flake and verify

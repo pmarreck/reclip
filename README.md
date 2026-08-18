@@ -1,6 +1,6 @@
 # ReClip
 
-A self-hosted, open-source video, audio, and image downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, Threads, Reddit, and 1000+ other sites — download as MP4 / MP3 / image-grid, **transcribe with Whisper, summarize, translate, and counter-argue using local LLMs**, and **strip image carousels from social sites that block direct saves**.
+A self-hosted, open-source video, audio, and image downloader with a clean web UI. Paste links from YouTube, TikTok, Instagram, Twitter/X, Threads, Reddit, and 1000+ other sites — download as video / audio / image-grid, **transcribe with Whisper, summarize, translate, and counter-argue using local LLMs**, and **strip image carousels from social sites that block direct saves**.
 
 [![Garnix](https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fgarnix.io%2Fapi%2Fbadges%2Fpmarreck%2Freclip%3Fbranch%3Dmain)](https://garnix.io/repo/pmarreck/reclip)
 ![Python](https://img.shields.io/badge/python-3.12-blue)
@@ -135,7 +135,7 @@ RECLIP_API_KEY=your_key ./run
 | `RECLIP_PORT` | `8899` | Server port |
 | `RECLIP_CACHE_DIR` | `$XDG_CACHE_HOME/reclip` | Cache directory |
 | `RECLIP_CACHE_MAX_MB` | `1024` | Max cache size in MB (LRU eviction) |
-| `RECLIP_GALLERY_DL_BROWSER` | `firefox` | Browser to extract cookies from for image-host auth (see [Image-host extraction](#image-host-extraction)). Set to `""` to disable. |
+| `RECLIP_GALLERY_DL_BROWSER` | (empty) | Opt-in browser cookie source for image-host auth: `firefox`, `chrome`, `safari`, or an explicit profile (see [Image-host extraction](#image-host-extraction)). |
 | `RECLIP_GALLERY_DL_COOKIES` | (empty) | Path to a Netscape-format `cookies.txt` file. Wins over `_BROWSER` when both are set. |
 | `RECLIP_STT_URL` | `http://localhost:8000/v1/audio/transcriptions` | Speech-to-text endpoint |
 | `RECLIP_STT_API_KEY` | `$RECLIP_API_KEY` | STT-specific API key |
@@ -233,14 +233,14 @@ Many social sites (Instagram, Threads, Reddit, X/Twitter, Pinterest, Tumblr, Img
 
 ### Authentication for protected hosts
 
-Instagram and most modern social sites bounce anonymous requests to a login wall. gallery-dl can extract session cookies from your already-logged-in browser:
+Instagram and most modern social sites bounce anonymous requests to a login wall. Browser-cookie access is disabled by default. To opt in, configure a browser where you are already logged in:
 
 ```ini
 # ~/.config/reclip+/config.ini
-RECLIP_GALLERY_DL_BROWSER=firefox          # default
+RECLIP_GALLERY_DL_BROWSER=firefox
 ```
 
-For multi-profile browsers (Firefox Nightly, Developer Edition, named profiles), pass the **directory name** under the profiles directory, not the friendly profile name:
+Plain `firefox` searches Firefox's Profiles directory and uses the most recently active cookie database, covering Stable, Beta, Developer Edition, and Nightly. `chrome` and `safari` are also supported; Safari may require Full Disk Access on macOS. To force a specific Firefox profile, pass the **directory name** under the profiles directory, not its friendly name:
 
 ```bash
 ls ~/Library/Application\ Support/Firefox/Profiles
@@ -260,6 +260,8 @@ RECLIP_GALLERY_DL_BROWSER=chromium:/Users/me/Library/Application Support/ChatGPT
 For an exported Netscape-format cookies.txt (e.g. via the *cookies.txt* browser extension), use `RECLIP_GALLERY_DL_COOKIES=/path/to/cookies.txt`. It wins over `_BROWSER` when both are set.
 
 > **Security:** when `RECLIP_HOST` is non-loopback, anyone on your LAN/Tailscale who can reach the server can trigger image fetches that *ride* your session cookies (they cannot read them, but they can use them on the configured host). ReClip+ prints a red startup warning when both conditions hold. Set `RECLIP_GALLERY_DL_BROWSER=""` to disable, or pin `RECLIP_HOST=127.0.0.1`.
+
+When gallery-dl cannot authenticate, the card distinguishes an unconfigured cookie source from a configured browser that is not logged in, has expired cookies, or points at the wrong profile. Change the browser selector in **Settings** and retry the URL.
 
 ## Remote access
 

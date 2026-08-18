@@ -48,6 +48,39 @@ def test_explicit_cache_max_mb(monkeypatch):
 	assert cfg["cache_max_mb"] == 2048
 
 
+def test_gallery_browser_cookie_extraction_is_opt_in(monkeypatch):
+	monkeypatch.delenv("RECLIP_GALLERY_DL_BROWSER", raising=False)
+	from config import load_config
+	cfg = load_config()
+	assert cfg["gallery_dl_browser"] == ""
+
+
+def test_explicit_blank_gallery_browser_overrides_service_environment(
+	monkeypatch, isolated_config_dir,
+):
+	monkeypatch.setenv("RECLIP_GALLERY_DL_BROWSER", "firefox")
+	isolated_config_dir.mkdir(parents=True, exist_ok=True)
+	(isolated_config_dir / "config.ini").write_text(
+		"RECLIP_GALLERY_DL_BROWSER=\n",
+	)
+	from config import Config
+	cfg = Config()
+	assert cfg["gallery_dl_browser"] == ""
+
+
+@pytest.mark.parametrize("browser", [
+	"firefox",
+	"firefox:default-release",
+	"chrome",
+	"safari",
+])
+def test_gallery_browser_cookie_source_is_configurable(monkeypatch, browser):
+	monkeypatch.setenv("RECLIP_GALLERY_DL_BROWSER", browser)
+	from config import load_config
+	cfg = load_config()
+	assert cfg["gallery_dl_browser"] == browser
+
+
 def test_stt_defaults():
 	from config import load_config
 	cfg = load_config()

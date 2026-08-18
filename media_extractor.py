@@ -146,7 +146,16 @@ _LOGIN_REDIRECT_PATTERNS = (
 	"authentication required",
 	"login page",
 	"401 unauthorized",
+	"http error 403",
 	"403 forbidden",
+)
+
+_BROWSER_COOKIE_FAILURE_PATTERNS = (
+	"cookies database",
+	"cookie database",
+	"failed to decrypt",
+	"unable to load cookies",
+	"unable to find cookies",
 )
 
 
@@ -181,17 +190,57 @@ def _unsupported_hint(url, stderr):
 
 def _looks_like_auth_failure(stderr):
 	low = (stderr or "").lower()
-	return any(pat in low for pat in _LOGIN_REDIRECT_PATTERNS)
+	return any(pat in low for pat in (
+		*_LOGIN_REDIRECT_PATTERNS,
+		*_BROWSER_COOKIE_FAILURE_PATTERNS,
+	))
 
 
-def _augment_auth_error(stderr):
-	"""Wrap a gallery-dl auth failure with an actionable hint."""
-	return (
-		f"{stderr.strip()}\n"
-		"Site requires login. Set RECLIP_GALLERY_DL_BROWSER (e.g. firefox/safari/"
-		"chrome) to extract session cookies live, or RECLIP_GALLERY_DL_COOKIES to "
-		"point at a Netscape-format cookies.txt file."
-	)
+def _browser_display_name(browser_spec):
+	browser = (browser_spec or "").split("/", 1)[0]
+	browser = browser.split("+", 1)[0].split(":", 1)[0]
+	return browser.replace("-", " ").title()
+
+
+def _augment_auth_error(url, stderr, cookies=None, cookies_from_browser=None):
+	"""Put actionable gallery authentication guidance before raw tool output.
+
+	The frontend intentionally displays the first line verbatim. Distinguishing
+	missing configuration from stale/wrong browser credentials tells a person
+	whether to opt in, sign in, or select another profile instead of collapsing
+	every gallery 403 into the generic video-platform error.
+	"""
+	host = _canonical_host(url) or "This site"
+	if cookies:
+		guidance = (
+			f"{host} rejected the configured cookies file. Refresh that file from a "
+			"logged-in browser or choose a browser with RECLIP_GALLERY_DL_BROWSER in Settings."
+		)
+	elif cookies_from_browser:
+		browser = _browser_display_name(cookies_from_browser)
+		guidance = (
+			f"{host} rejected the configured {browser} cookies. {browser} is not "
+			"logged in to this site, its cookies have expired, or the selected "
+			"profile may be wrong. Sign in there or change RECLIP_GALLERY_DL_BROWSER in Settings."
+		)
+	else:
+		guidance = (
+			f"{host} requires a logged-in session. Sign in to the site in Firefox, "
+			"Chrome, or Safari, then set RECLIP_GALLERY_DL_BROWSER in Settings."
+		)
+	return f"Gallery authentication required: {guidance}\ngallery-dl: {stderr.strip()}"
+
+
+def _raise_gallery_error(url, stderr, cookies=None, cookies_from_browser=None):
+	"""Translate one gallery-dl failure consistently for every invocation."""
+	hint = _unsupported_hint(url, stderr)
+	if hint:
+		raise RuntimeError(hint)
+	if _looks_like_auth_failure(stderr):
+		raise RuntimeError(_augment_auth_error(
+			url, stderr, cookies, cookies_from_browser,
+		))
+	raise RuntimeError(stderr)
 
 
 def _auth_args(cookies, cookies_from_browser):
@@ -221,12 +270,7 @@ def dump_images(url, runner=None, timeout=60,
 	r = runner(dump_cmd, capture_output=True, text=True, timeout=timeout)
 	if getattr(r, "returncode", 1) != 0:
 		err = (getattr(r, "stderr", "") or "").strip() or "gallery-dl --dump-json failed"
-		hint = _unsupported_hint(url, err)
-		if hint:
-			raise RuntimeError(hint)
-		if _looks_like_auth_failure(err):
-			raise RuntimeError(_augment_auth_error(err))
-		raise RuntimeError(err)
+		_raise_gallery_error(url, err, cookies, cookies_from_browser)
 
 	return _parse_dump(getattr(r, "stdout", "") or "")
 
@@ -260,12 +304,7 @@ def fetch_images(url, dest_dir, runner=None, timeout=60,
 	r = runner(dump_cmd, capture_output=True, text=True, timeout=timeout)
 	if getattr(r, "returncode", 1) != 0:
 		err = (getattr(r, "stderr", "") or "").strip() or "gallery-dl --dump-json failed"
-		hint = _unsupported_hint(url, err)
-		if hint:
-			raise RuntimeError(hint)
-		if _looks_like_auth_failure(err):
-			raise RuntimeError(_augment_auth_error(err))
-		raise RuntimeError(err)
+		_raise_gallery_error(url, err, cookies, cookies_from_browser)
 
 	items = _parse_dump(getattr(r, "stdout", "") or "")
 
@@ -273,9 +312,7 @@ def fetch_images(url, dest_dir, runner=None, timeout=60,
 	r2 = runner(dl_cmd, capture_output=True, text=True, timeout=timeout)
 	if getattr(r2, "returncode", 1) != 0:
 		err = (getattr(r2, "stderr", "") or "").strip() or "gallery-dl download failed"
-		if _looks_like_auth_failure(err):
-			raise RuntimeError(_augment_auth_error(err))
-		raise RuntimeError(err)
+		_raise_gallery_error(url, err, cookies, cookies_from_browser)
 
 	# Reconcile dump-json metadata against what actually landed on disk.
 	# gallery-dl's filename format for Instagram (e.g. "{sidecar_media_id}_

@@ -628,6 +628,10 @@
     }
 
     function friendlyError(err) {
+      // Gallery auth failures carry an actionable first line from the server.
+      // Preserve it before generic 403 mapping and length truncation erase the
+      // distinction between "not configured" and "browser not logged in".
+      if (err.includes('Gallery authentication required:')) return err.split('\n')[0];
       if (err.includes('Unsupported URL')) return 'This URL is not supported';
       if (err.includes('Video unavailable')) return 'Video is unavailable or private';
       if (err.includes('Private video')) return 'This video is private';
@@ -780,7 +784,7 @@
             </div>
           </div>
           <div class="card-body">
-            <div class="card-title" style="color:var(--error)">Could not fetch video</div>
+            <div class="card-title" style="color:var(--error)">Could not fetch media</div>
             <div class="card-error-msg">${esc(friendlyError(c.error || ''))}</div>
             <div class="card-error-url">${esc(c.url)}</div>
           </div>

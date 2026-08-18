@@ -23,6 +23,12 @@ def _op_to_source(template):
 	return template[start:end]
 
 
+def _friendly_error_source(template):
+	start = template.index("    function friendlyError(err) {")
+	end = template.index("\n    document.getElementById('urls')", start)
+	return template[start:end]
+
+
 def test_copy_action_has_clipboard_fallback_for_firefox():
 	template = TEMPLATE_PATH.read_text()
 	assert "async function copyToClipboard(text)" in template
@@ -54,6 +60,13 @@ def test_diarize_operation_uses_its_user_facing_label():
 	template = TEMPLATE_PATH.read_text()
 	assert "const builtinOpLabels = { speakers: 'Diarize' };" in template
 	assert "builtinOpLabels[op] || op.replace(/_/g, ' ')" in template
+
+
+def test_gallery_auth_error_survives_generic_403_mapping_and_truncation():
+	source = _friendly_error_source(TEMPLATE_PATH.read_text())
+	auth_marker = source.index("Gallery authentication required:")
+	assert auth_marker < source.index("HTTP Error 403")
+	assert "err.split('\\n')[0]" in source
 
 
 def test_cached_action_keeps_its_server_resolved_source_filename():
