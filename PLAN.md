@@ -14,6 +14,8 @@
       Completed 2026-08-24 13:04 EDT: ffmpeg now receives ten minutes and writes
       extension-preserving staging files which replace cache entries atomically.
       Full suite: 382 passed; `nix build` passed.
+      Live end-to-end Diarize completed 2026-08-24 13:15 EDT on the original
+      97-minute report: 2 speakers, 1,269 turns, and both speakers named.
 
 ## Completed: Codec metadata preflight and RedGifs regression (2026-08-18)
 - [x] Inspect the selected audio source's yt-dlp metadata before payload
