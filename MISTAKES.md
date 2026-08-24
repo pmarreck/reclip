@@ -1,5 +1,9 @@
 # MISTAKES
 
+- **2026-08-24: Assumed BSD `stat` despite a GNU-preferring PATH.** A forensic
+  size report used `stat -f %z`, which GNU `stat` interpreted as filesystem
+  mode and produced noisy output. Use portable `wc -c` for byte counts when
+  the active command provider is not established.
 - **2026-08-18: Chained repository state changes in one shell command.** I ran
   `git add ... && git commit ...` despite the instruction to keep commands
   separate. Use one tool invocation per state-changing Git command so each

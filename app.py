@@ -154,6 +154,8 @@ AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
 # yt-dlp select its best format when those metadata filters cannot match.
 VIDEO_DOWNLOAD_FORMAT = f"{AUDIO_SOURCE_FORMATS[1]}/best"
 AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3")
+AUDIO_PROBE_TIMEOUT_SECONDS = 10
+AUDIO_EXTRACTION_TIMEOUT_SECONDS = 600
 M4A_COPY_CODEC_PREFIXES = ("aac", "mp4a")
 M4A_COPY_CODECS = frozenset({"alac"})
 VIDEO_EXTENSIONS = frozenset({"3gp", "flv", "m4v", "mkv", "mov", "mp4", "webm"})
@@ -227,10 +229,18 @@ def _audio_source_formats(url):
 
 
 def _cached_audio_path(url):
-    """Return the preferred cached audio artifact, including legacy MP3s."""
+    """Return the preferred decodable cache artifact, including legacy MP3s.
+
+    A process timeout can leave a plausible non-empty media file without its
+    final container index. Probe the audio stream before reuse so one poisoned
+    cache entry cannot repeatedly fail transcription, diarization, and TTS.
+    """
     for filename in AUDIO_CACHE_FILENAMES:
         if cache.has_file(url, filename):
-            return cache.entry_path(url, filename)
+            path = cache.entry_path(url, filename)
+            if _audio_file_is_valid(path):
+                return path
+            _log("audio", "ignoring invalid cached artifact: %s", path)
     return None
 
 
@@ -239,6 +249,44 @@ def _remove_incomplete_file(path):
         os.remove(path)
     except OSError:
         pass
+
+
+def _audio_file_is_valid(path):
+    """Use ffprobe to confirm a cached artifact contains a readable audio stream."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "a:0",
+                "-show_entries", "stream=codec_name", "-of",
+                "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True, text=True, timeout=AUDIO_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _partial_audio_path(path):
+    """Keep ffmpeg staging recognizable while preserving its container suffix."""
+    root, extension = os.path.splitext(path)
+    return f"{root}.partial{extension}"
+
+
+def _run_audio_extraction(cmd, partial_path):
+    """Run one ffmpeg extraction without allowing timeout debris into cache."""
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=AUDIO_EXTRACTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        _remove_incomplete_file(partial_path)
+        minutes = AUDIO_EXTRACTION_TIMEOUT_SECONDS // 60
+        raise RuntimeError(
+            f"Audio extraction timed out ({minutes} min limit); no partial "
+            "cache artifact was saved"
+        ) from e
 
 
 def _normalized_codec(codec):
@@ -306,27 +354,33 @@ def _extract_audio_track(source_path, preferred_path, audio_codec=None):
     RedGifs can report ``none`` for a valid AAC-bearing MP4.
     """
     fallback_path = os.path.splitext(preferred_path)[0] + ".mp3"
-    _remove_incomplete_file(preferred_path)
+    preferred_partial = _partial_audio_path(preferred_path)
+    fallback_partial = _partial_audio_path(fallback_path)
+    _remove_incomplete_file(preferred_partial)
+    _remove_incomplete_file(fallback_partial)
     if _codec_can_copy_to_m4a(audio_codec) is not False:
         copy_cmd = [
             "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn", "-c:a", "copy",
-            preferred_path, "-y",
+            preferred_partial, "-y",
         ]
-        result = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=120)
-        if result.returncode == 0 and os.path.isfile(preferred_path):
+        result = _run_audio_extraction(copy_cmd, preferred_partial)
+        if result.returncode == 0 and os.path.isfile(preferred_partial):
+            os.replace(preferred_partial, preferred_path)
             return preferred_path
 
-    _remove_incomplete_file(preferred_path)
-    _remove_incomplete_file(fallback_path)
+    _remove_incomplete_file(preferred_partial)
     transcode_cmd = [
         "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn",
-        "-acodec", "libmp3lame", "-q:a", "2", fallback_path, "-y",
+        "-acodec", "libmp3lame", "-q:a", "2", fallback_partial, "-y",
     ]
-    result = subprocess.run(transcode_cmd, capture_output=True, text=True, timeout=120)
+    result = _run_audio_extraction(transcode_cmd, fallback_partial)
     if result.returncode != 0:
+        _remove_incomplete_file(fallback_partial)
         raise RuntimeError(_last_stderr_line(result))
-    if not os.path.isfile(fallback_path):
+    if not os.path.isfile(fallback_partial):
         raise RuntimeError("Audio extraction completed but no audio file was found")
+    os.replace(fallback_partial, fallback_path)
+    _remove_incomplete_file(preferred_path)
     return fallback_path
 
 

@@ -1,5 +1,20 @@
 # PLAN
 
+## Completed: Corrupt cached audio recovery (2026-08-24)
+- [x] Reject cached audio that ffprobe cannot decode, then reacquire it instead
+      of forwarding a poisoned artifact to transcription or diarization.
+      Curiosity poke: validation must accept both current M4A and legacy MP3
+      artifacts without turning an absent cache entry into a subprocess call.
+      Completed 2026-08-24 13:04 EDT: the malformed live M4A was rejected and
+      replaced with a probed 5,875-second AAC artifact.
+- [x] Publish ffmpeg extraction output only after it completes and allow long
+      recordings enough time to remux; clean staging files after every failure.
+      Curiosity poke: a failed lossless copy must not overwrite the last cache
+      artifact or prevent the existing MP3 fallback for incompatible codecs.
+      Completed 2026-08-24 13:04 EDT: ffmpeg now receives ten minutes and writes
+      extension-preserving staging files which replace cache entries atomically.
+      Full suite: 382 passed; `nix build` passed.
+
 ## Completed: Codec metadata preflight and RedGifs regression (2026-08-18)
 - [x] Inspect the selected audio source's yt-dlp metadata before payload
       transfer and use its audio codec to choose lossless M4A remux versus MP3

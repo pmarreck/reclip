@@ -232,7 +232,7 @@ class TestTranscribeEndpoint:
         assert ["-c:a", "copy"] == ffmpeg_cmd[
             ffmpeg_cmd.index("-c:a"):ffmpeg_cmd.index("-c:a") + 2
         ]
-        assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.m4a")
+        assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.partial.m4a")
 
     def test_ensure_audio_inspects_codec_metadata_before_transfer(self, tmp_cache, monkeypatch):
         import app
@@ -417,9 +417,109 @@ class TestTranscribeEndpoint:
         legacy_path = app.cache.entry_path(url, "audio.mp3")
         with open(legacy_path, "wb") as f:
             f.write(b"legacy audio")
-        monkeypatch.setattr(subprocess, "run", lambda *a, **kw: pytest.fail("must not download"))
+
+        def valid_probe(cmd, *args, **kwargs):
+            assert cmd[0] == "ffprobe"
+
+            class R:
+                returncode = 0
+                stdout = "mp3\n"
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", valid_probe)
 
         assert app._ensure_audio(url) == legacy_path
+
+    def test_cached_audio_selects_first_valid_artifact_from_mixed_set(
+            self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=mixedcache"
+        invalid_m4a = app.cache.entry_path(url, "audio.m4a")
+        valid_mp3 = app.cache.entry_path(url, "audio.mp3")
+        with open(invalid_m4a, "wb") as f:
+            f.write(b"truncated m4a")
+        with open(valid_mp3, "wb") as f:
+            f.write(b"valid legacy mp3")
+        probed = []
+
+        def probe_by_path(cmd, *args, **kwargs):
+            probed.append(cmd[-1])
+
+            class R:
+                returncode = 0 if cmd[-1] == valid_mp3 else 1
+                stdout = "mp3\n" if returncode == 0 else ""
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", probe_by_path)
+
+        assert app._ensure_audio(url) == valid_mp3
+        assert probed == [invalid_m4a, valid_mp3]
+
+    def test_ensure_audio_reacquires_invalid_cached_artifact(self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=truncatedcache"
+        cached_path = app.cache.entry_path(url, "audio.m4a")
+        with open(cached_path, "wb") as f:
+            f.write(b"truncated m4a without a moov atom")
+        calls = []
+        monkeypatch.setattr(app, "_fetch_and_cache_metadata", lambda u: {})
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "ffprobe":
+                R.returncode = 1
+                R.stderr = "moov atom not found"
+            elif cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                R.stdout = json.dumps({"acodec": "mp4a.40.2"})
+            elif cmd[0] == "yt-dlp":
+                source_path = app.cache.entry_path(url, "audio_source.mp4")
+                with open(source_path, "wb") as f:
+                    f.write(b"complete source")
+            elif cmd[0] == "ffmpeg":
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"complete replacement audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        assert app._ensure_audio(url) == cached_path
+        assert any(cmd[0] == "ffprobe" for cmd in calls)
+        assert any(cmd[0] == "yt-dlp" and "--simulate" not in cmd for cmd in calls)
+        with open(cached_path, "rb") as f:
+            assert f.read() == b"complete replacement audio"
+
+    def test_extract_audio_timeout_does_not_publish_partial_artifact(
+            self, tmp_cache, monkeypatch):
+        import app
+
+        source_path = tmp_cache / "source.mp4"
+        preferred_path = tmp_cache / "audio.m4a"
+        source_path.write_bytes(b"source")
+
+        def timeout_after_writing(cmd, *args, **kwargs):
+            with open(cmd[-2], "wb") as f:
+                f.write(b"incomplete audio")
+            raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+        monkeypatch.setattr(subprocess, "run", timeout_after_writing)
+
+        with pytest.raises(RuntimeError, match="Audio extraction timed out"):
+            app._extract_audio_track(
+                str(source_path), str(preferred_path), audio_codec="mp4a.40.2"
+            )
+
+        assert not preferred_path.exists()
+        assert not list(tmp_cache.glob("audio.partial.*"))
 
     def test_ensure_audio_discards_stale_partial_source_before_extracting(self, tmp_cache, monkeypatch):
         import app
@@ -938,7 +1038,9 @@ class TestDownloadCaching:
         assert ["-c:a", "copy"] == ffmpeg_cmd[
             ffmpeg_cmd.index("-c:a"):ffmpeg_cmd.index("-c:a") + 2
         ]
-        assert ffmpeg_cmd[-2] == os.path.join(app.DOWNLOAD_DIR, f"{job_id}.m4a")
+        assert ffmpeg_cmd[-2] == os.path.join(
+            app.DOWNLOAD_DIR, f"{job_id}.partial.m4a"
+        )
 
     def test_audio_download_does_not_cache_video(self, client, tmp_cache, monkeypatch):
         import app
@@ -1512,6 +1614,7 @@ class TestDiarizeEndpoint:
                              json.dumps(self.SEGMENTS))
         with open(app.cache.entry_path(self.URL, "audio.mp3"), "wb") as f:
             f.write(b"\x00fakeaudio")
+        monkeypatch.setattr(app, "_audio_file_is_valid", lambda path: True)
 
     def _poll(self, client, job_id):
         for _ in range(100):
