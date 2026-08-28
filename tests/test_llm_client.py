@@ -4,6 +4,21 @@ import responses
 
 
 class TestTranscribe:
+	def test_missing_backend_ffmpeg_classifier_covers_message_set(self):
+		from llm_client import _is_missing_backend_ffmpeg
+
+		cases = {
+			"ffmpeg not found!": True,
+			"FFMPEG is not available": True,
+			"[Errno 2] No such file or directory: 'ffmpeg'": True,
+			"model not found": False,
+			"ffprobe failed": False,
+			"audio decoding failed": False,
+		}
+		assert {
+			message: _is_missing_backend_ffmpeg(message) for message in cases
+		} == cases
+
 	@responses.activate
 	def test_transcribe_posts_audio_file(self, tmp_path):
 		from llm_client import transcribe
@@ -123,6 +138,30 @@ class TestTranscribe:
 				api_key="",
 				prompt="",
 			)
+
+	@responses.activate
+	def test_backend_ffmpeg_error_explains_service_path(self, tmp_path):
+		from llm_client import transcribe, LLMError
+		audio_file = tmp_path / "audio.m4a"
+		audio_file.write_bytes(b"data")
+
+		responses.add(
+			responses.POST,
+			"http://localhost:8000/v1/audio/transcriptions",
+			json={"error": {"message": "ffmpeg not found!"}},
+			status=500,
+		)
+
+		with pytest.raises(LLMError) as exc_info:
+			transcribe(
+				audio_path=str(audio_file),
+				url="http://localhost:8000/v1/audio/transcriptions",
+				model="whisper",
+			)
+
+		message = str(exc_info.value)
+		assert "transcription server process cannot find ffmpeg" in message
+		assert "macOS GUI apps do not inherit your shell PATH" in message
 
 	@responses.activate
 	def test_missing_transcription_model_explains_how_to_configure_it(self, tmp_path):

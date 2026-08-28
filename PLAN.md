@@ -1,4 +1,41 @@
+---
+purpose: Track active and recently completed ReClip work with dated verification.
+audience: agent
+maintained_by: agent
+---
+
 # PLAN
+
+## Completed: Restore oMLX ffmpeg access (2026-08-27)
+- [x] Configure oMLX's user LaunchAgent to execute the app directly with the
+      stable Nix system profile on PATH. Completed 2026-08-27 12:16 EDT.
+      Curiosity poke: `open -a` delegates to LaunchServices, which discards the
+      helper's environment and gives GUI apps only the macOS system PATH.
+- [x] Verify the formerly failing M4A decoder path directly against oMLX; a
+      two-second M4A now transcribes with HTTP 200. Completed 2026-08-27 12:18
+      EDT. Curiosity poke: keep ReClip's original M4A source rather than
+      introducing a redundant temporary WAV when the backend is configured.
+- [x] Verify the exact cached "MacOS Is Making Your Mac Slow" item through
+      ReClip's Transcribe API. Completed 2026-08-27 12:21 EDT: the 31:48 M4A
+      completed and cached a 32,754-character transcript.
+
+## Completed: Cached media downloads and compatible MP3 output (2026-08-27)
+- [x] Serve an existing cached audio/video artifact without contacting its
+      source platform again. Curiosity poke: an audio-only card must remain an
+      audio download after reload even though the page-wide mode defaults to
+      Video, while a card containing both formats should honor the mode toggle.
+      Completed 2026-08-27 23:24 EDT: Firefox resolved the audio-only cached
+      card as audio while the global toggle remained Video, and a second click
+      reused the unchanged local MP3.
+- [x] Produce user-facing audio downloads as broadly compatible 192 kbps CBR
+      MP3 while retaining losslessly remuxed M4A internally for transcription.
+      Curiosity poke: cache the compatibility MP3 under a distinct name so an
+      internal VBR MP3 codec fallback cannot be mistaken for the promised CBR
+      download artifact.
+      Completed 2026-08-27 23:22 EDT: live ffprobe measured the generated
+      `audio-192k.mp3` at exactly 192,000 bit/s while `audio.m4a` remained.
+- [x] Restore the required top-level `./build` entrypoint as a deterministic
+      `nix build` wrapper. Completed 2026-08-27 23:19 EDT.
 
 ## Completed: Corrupt cached audio recovery (2026-08-24)
 - [x] Reject cached audio that ffprobe cannot decode, then reacquire it instead

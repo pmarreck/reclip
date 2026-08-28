@@ -45,6 +45,26 @@ that was previously patched/overridden locally:
   `~/.omlx/model_settings.json` is back to its original 3 entries
   (whisper-large-v3-mlx, jina, gemma4). Backups: `model_settings.json.bak.*`.
 
+### LaunchAgent PATH
+
+On 2026-08-27, `~/Library/LaunchAgents/com.omlx.app.plist` was changed to run
+`/Applications/oMLX.app/Contents/MacOS/oMLX` directly and give it this PATH:
+
+```text
+/run/current-system/sw/bin:/nix/var/nix/profiles/default/bin:/Users/pmarreck/.nix-profile/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+```
+
+The previous `open -a /Applications/oMLX.app` job delegated startup to
+LaunchServices, which launched oMLX with only `/usr/bin:/bin:/usr/sbin:/sbin`.
+Consequently mlx-audio could not find the Nix-managed `ffmpeg` needed to decode
+M4A/AAC/WebM input, even though ReClip's own service PATH was correct. The
+stable `/run/current-system/sw/bin` symlink avoids pinning a changing Nix store
+hash. The original plist is backed up as
+`com.omlx.app.plist.before-reclip-path-20260827` in the same directory.
+
+After any oMLX update or change to its "launch at login" setting, confirm the
+plist still has the direct executable and PATH above; oMLX may regenerate it.
+
 ## STT decision (evidence-based)
 
 On 0.4.4, `word_timestamps=true` finally **populates**. The initial 90s

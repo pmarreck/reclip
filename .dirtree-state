@@ -1,20 +1,27 @@
 # Dirtree: Stateful directory trees in the CLI for humans and LLMs. https://github.com/pmarreck/dirtree
 ver=1.2
 annotate=[
+	LOCAL_ENV.md = Tracked record of out-of-repo oMLX app, model, config, and LaunchAgent PATH state.
 	MISTAKES.md = Agent workflow mistakes and concrete prevention lessons accumulated during ReClip development.
 	PLAN.md = Current and recently completed ReClip work with dated verification notes and curiosity checks.
+	README.md = Public setup, workflows, troubleshooting, cache/download behavior, and backend configuration guide.
 	actions.py = Hot-reloadable LLM action registry (actions.json): id/name/source/system_prompt/params; source chains; cycle+dup validation; last_error for UI
-	app.py = Flask/API workflow core; validates cached audio, atomically stages ffmpeg extraction, and metadata-probes source codecs before download.
+	app.py = Flask/API workflow core; cache-first downloads, 192 kbps MP3 compatibility output, audio recovery, STT, diarization, and LLM actions.
 	bin/reclip = Checkout-local CLI launcher using the reproducible Nix environment.
+	build = Top-level deterministic Nix package build wrapper.
+	cache.py = URL-keyed filesystem cache with media-type flags, metadata, pinning, LRU eviction, and text/media artifact storage.
 	config.py = Loads ReClip settings; Turbo Whisper is the default STT for reliable word-timestamped long-form transcription.
 	diarizer.py = ctypes binding to libspeakrs_ffi (RECLIP_SPEAKRS_LIB); ffmpeg f32le decode helper
+	llm_client.py = OpenAI-compatible STT/chat/TTS client with actionable backend config errors and oMLX stale-model recovery.
 	paragraphize.py = Lossless timestamp- and sentence-aware paragraph formatter for raw STT transcripts.
 	secrets.ini.example = Template for ~/.config/reclip+/secrets.ini — API keys for service processes that lack shell env
 	speakers.py = Pure speaker pipeline: word/segment merge vs turns, diarized formatting, LLM naming prompt/parse/confidence-gate
-	templates/index.html = Single-page ReClip UI; Copy actions use secure Clipboard API with a Firefox-compatible fallback and per-operation feedback.
+	templates/index.html = Single-page UI; cached cards retain artifact type and download locally, with Firefox-compatible Copy and text workflow controls.
+	tests/conftest.py = Pytest fixtures isolate both cache and transient download write boundaries.
 	tests/test_actions.py = 22 tests: defaults match config.py prompts, source chains, cycle/dup/malformed validation, hot-reload last-good
 	tests/test_api.py = API/workflow regressions including corrupt audio recovery, atomic ffmpeg output, codec fallback, diarization, actions, and downloads.
 	tests/test_cli.py = Hermetic public CLI contracts for media workflow delegation and PATH launcher.
+	tests/test_llm_client.py = STT/chat/TTS request and actionable backend failure contracts, including oMLX recovery and service PATH errors.
 	tests/test_paragraphize.py = Pure regression contracts for lossless raw-transcript paragraphization.
 	tests/test_ui_template.py = Regression contracts for Copy control markup and Firefox-compatible clipboard fallback in the UI template.
 ]

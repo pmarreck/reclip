@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -u
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if ! cd "$ROOT"; then
+	printf 'Unable to enter project root: %s\n' "$ROOT" >&2
+	exit 1
+fi
+
+exec nix build

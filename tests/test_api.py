@@ -982,6 +982,77 @@ class TestDownloadCaching:
         assert app.jobs[job_id]["status"] == "done"
         assert app.cache.has_file(url, "audio.m4a"), "audio.m4a should be cached after audio download"
 
+    def test_audio_download_reuses_cached_source_as_192k_mp3(
+            self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=cachedaudio"
+        cached_source = app.cache.entry_path(url, "audio.m4a")
+        with open(cached_source, "wb") as f:
+            f.write(b"cached AAC source")
+        job_id = "cachedaud1"
+        app.jobs[job_id] = {
+            "status": "downloading", "url": url, "title": "Cached Audio",
+        }
+        calls = []
+        monkeypatch.setattr(app, "_audio_file_is_valid", lambda path: True)
+
+        def mock_run(cmd, *args, **kwargs):
+            calls.append(cmd)
+            if cmd[0] == "yt-dlp":
+                pytest.fail("a cached audio download must not contact the platform")
+            assert cmd[0] == "ffmpeg"
+            with open(cmd[-2], "wb") as f:
+                f.write(b"192 kbps MP3")
+
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        app.run_download(job_id, url, "audio", None)
+
+        job = app.jobs[job_id]
+        assert job["status"] == "done", job.get("error")
+        assert job["filename"] == "Cached Audio.mp3"
+        assert job["file"].endswith(".mp3")
+        ffmpeg_cmd = calls[0]
+        assert ["-b:a", "192k"] == ffmpeg_cmd[
+            ffmpeg_cmd.index("-b:a"):ffmpeg_cmd.index("-b:a") + 2
+        ]
+        assert app.cache.has_file(url, "audio-192k.mp3")
+
+    def test_cached_download_artifacts_are_reused_as_a_set(
+            self, client, tmp_cache, monkeypatch):
+        import app
+
+        cases = [
+            ("https://example.com/video", "video", "video.mp4"),
+            ("https://example.com/audio", "audio", "audio-192k.mp3"),
+        ]
+        monkeypatch.setattr(app, "_audio_file_is_valid", lambda path: True)
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *args, **kwargs: pytest.fail("cache hits must not run subprocesses"),
+        )
+
+        for index, (url, format_choice, cache_filename) in enumerate(cases):
+            cached_path = app.cache.entry_path(url, cache_filename)
+            with open(cached_path, "wb") as f:
+                f.write(cache_filename.encode())
+            job_id = f"cachehit{index}"
+            app.jobs[job_id] = {
+                "status": "downloading", "url": url, "title": f"Item {index}",
+            }
+
+            app.run_download(job_id, url, format_choice, None)
+
+            assert app.jobs[job_id]["status"] == "done"
+            assert app.jobs[job_id]["file"] == cached_path
+
     def test_audio_download_extracts_from_working_video_download(self, client, tmp_cache, monkeypatch):
         import app
 

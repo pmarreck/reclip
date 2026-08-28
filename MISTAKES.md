@@ -1,5 +1,21 @@
+---
+purpose: Record workflow mistakes and concrete prevention lessons for future agents.
+audience: agent
+maintained_by: agent
+---
+
 # MISTAKES
 
+- **2026-08-27: Isolated the test cache but not transient downloads.** The
+  `tmp_cache` fixture redirected `app.cache` while `app.DOWNLOAD_DIR` still
+  pointed into the checkout, so otherwise passing API tests left fixture media
+  behind. Stateful workflow fixtures must redirect every write boundary, and
+  the final `dirtree` pass must be checked for artifacts before committing.
+- **2026-08-27: Used an authenticated endpoint as an unauthenticated readiness
+  probe.** `/v1/models` returned HTTP 401 because oMLX was already ready, but
+  `curl -f` treated that as unavailable and kept polling. For authenticated
+  services, provide the configured credential or use a probe that distinguishes
+  transport failure from an expected authentication response.
 - **2026-08-24: Assumed BSD `stat` despite a GNU-preferring PATH.** A forensic
   size report used `stat -f %z`, which GNU `stat` interpreted as filesystem
   mode and produced noisy output. Use portable `wc -c` for byte counts when

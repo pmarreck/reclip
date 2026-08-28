@@ -153,7 +153,8 @@ AUDIO_SOURCE_FORMAT = AUDIO_SOURCE_FORMATS[0]
 # both codecs as unknown. Preserve the preferred known-codec choices, then let
 # yt-dlp select its best format when those metadata filters cannot match.
 VIDEO_DOWNLOAD_FORMAT = f"{AUDIO_SOURCE_FORMATS[1]}/best"
-AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3")
+AUDIO_DOWNLOAD_CACHE_FILENAME = "audio-192k.mp3"
+AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3", AUDIO_DOWNLOAD_CACHE_FILENAME)
 AUDIO_PROBE_TIMEOUT_SECONDS = 10
 AUDIO_EXTRACTION_TIMEOUT_SECONDS = 600
 M4A_COPY_CODEC_PREFIXES = ("aac", "mp4a")
@@ -382,6 +383,45 @@ def _extract_audio_track(source_path, preferred_path, audio_codec=None):
     os.replace(fallback_partial, fallback_path)
     _remove_incomplete_file(preferred_path)
     return fallback_path
+
+
+def _cached_download_artifact(url, format_choice):
+    """Resolve a user-facing cached media artifact without platform access.
+
+    Reloaded cards represent artifacts already on disk. Treating their Download
+    button like a fresh acquisition recontacts the source and can fail after a
+    platform URL expires or its anti-bot policy changes.
+    """
+    if format_choice == "video":
+        path = cache.entry_path(url, "video.mp4")
+        return path if os.path.isfile(path) else None
+    if format_choice == "audio":
+        path = cache.entry_path(url, AUDIO_DOWNLOAD_CACHE_FILENAME)
+        if os.path.isfile(path) and _audio_file_is_valid(path):
+            return path
+    return None
+
+
+def _create_compatibility_mp3(source_path, target_path):
+    """Publish a 192 kbps CBR MP3 while retaining the higher-quality source.
+
+    Internal M4A remains the transcription source. The separate MP3 is the
+    compatibility artifact offered to browsers and external audio players.
+    """
+    partial_path = _partial_audio_path(target_path)
+    _remove_incomplete_file(partial_path)
+    cmd = [
+        "ffmpeg", "-i", source_path, "-map", "0:a:0", "-vn",
+        "-c:a", "libmp3lame", "-b:a", "192k", partial_path, "-y",
+    ]
+    result = _run_audio_extraction(cmd, partial_path)
+    if result.returncode != 0:
+        _remove_incomplete_file(partial_path)
+        raise RuntimeError(_last_stderr_line(result))
+    if not os.path.isfile(partial_path):
+        raise RuntimeError("MP3 conversion completed but no audio file was found")
+    os.replace(partial_path, target_path)
+    return target_path
 
 
 def _download_audio_from_video_source(url, source_template, audio_path):
@@ -657,18 +697,48 @@ def _run_action_job(job_id, url, action, params, source_variant=None):
         _log("action", "%s: ERROR: %s", action.id, e)
 
 
+def _complete_download_job(job, chosen):
+    """Record a local artifact as ready for the shared download endpoint."""
+    job["status"] = "done"
+    job["file"] = chosen
+    ext = os.path.splitext(chosen)[1]
+    title = job.get("title", "").strip()
+    if title:
+        safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()[:100].strip()
+        job["filename"] = f"{safe_title}{ext}" if safe_title else os.path.basename(chosen)
+    else:
+        job["filename"] = os.path.basename(chosen)
+
+
 def run_download(job_id, url, format_choice, format_id):
     job = jobs[job_id]
     out_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
 
     try:
+        cached_artifact = _cached_download_artifact(url, format_choice)
+        if cached_artifact:
+            _complete_download_job(job, cached_artifact)
+            return
+
         audio_output = None
         if format_choice == "audio":
-            # Keep transient video sources under a separate basename: cleanup
-            # must never match and delete the final user-facing audio artifact.
-            source_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.source.%(ext)s")
-            audio_output = _download_audio_from_video_source(
-                url, source_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.m4a")
+            internal_audio = _cached_audio_path(url)
+            if internal_audio is None:
+                # Keep transient video sources under a separate basename:
+                # cleanup must never match the final user-facing MP3.
+                source_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.source.%(ext)s")
+                internal_audio = _download_audio_from_video_source(
+                    url, source_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.m4a")
+                )
+                try:
+                    internal_name = (
+                        "audio.m4a" if internal_audio.endswith(".m4a") else "audio.mp3"
+                    )
+                    cache.write_file(url, internal_name, internal_audio)
+                except Exception:
+                    pass
+            audio_output = _create_compatibility_mp3(
+                internal_audio, os.path.join(DOWNLOAD_DIR, f"{job_id}.mp3")
             )
         else:
             cmd = ["yt-dlp", "--no-playlist", "-o", out_template]
@@ -709,22 +779,12 @@ def run_download(job_id, url, format_choice, format_id):
                 except OSError:
                     pass
 
-        job["status"] = "done"
-        job["file"] = chosen
-        ext = os.path.splitext(chosen)[1]
-        title = job.get("title", "").strip()
-        # Sanitize title for filename
-        if title:
-            safe_title = "".join(c for c in title if c not in r'\/:*?"<>|').strip()[:100].strip()
-            job["filename"] = f"{safe_title}{ext}" if safe_title else os.path.basename(chosen)
-        else:
-            job["filename"] = os.path.basename(chosen)
+        _complete_download_job(job, chosen)
 
         # Cache the downloaded file (best-effort — failures must not break the download)
         try:
             if format_choice == "audio":
-                audio_cache_name = "audio.m4a" if chosen.endswith(".m4a") else "audio.mp3"
-                cache.write_file(url, audio_cache_name, chosen)
+                cache.write_file(url, AUDIO_DOWNLOAD_CACHE_FILENAME, chosen)
             else:
                 cache.write_file(url, "video.mp4", chosen)
                 # Also extract and cache audio for future transcription use

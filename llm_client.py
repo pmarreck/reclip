@@ -27,6 +27,14 @@ _UNAVAILABLE_MODEL_PATTERNS = (
 	re.compile(r"\b(?:not loaded|not found|unavailable|unknown)\b.*\bmodel\b", re.IGNORECASE),
 )
 
+_MISSING_BACKEND_FFMPEG_PATTERNS = (
+	re.compile(
+		r"\bffmpeg\b.{0,80}\b(?:not found|not available|unavailable|missing)\b",
+		re.IGNORECASE,
+	),
+	re.compile(r"\bno such file or directory\b.{0,80}\bffmpeg\b", re.IGNORECASE),
+)
+
 
 def _try_unload_omlx_model(api_url, model, api_key):
 	"""Best-effort POST to oMLX's /v1/models/{model}/unload to clear stale state.
@@ -66,6 +74,11 @@ def _has_unavailable_model_error(error_msg):
 	return any(p.search(error_msg) for p in _UNAVAILABLE_MODEL_PATTERNS)
 
 
+def _is_missing_backend_ffmpeg(error_msg):
+	"""Recognize decoder failures caused by ffmpeg missing from backend PATH."""
+	return any(p.search(error_msg) for p in _MISSING_BACKEND_FFMPEG_PATTERNS)
+
+
 def _configured_http_error(resp, default, model, model_hint, api_key_hint):
 	"""Add actionable local-config guidance to OpenAI-compatible HTTP errors."""
 	error_msg = _response_error_message(resp, default)
@@ -73,6 +86,13 @@ def _configured_http_error(resp, default, model, model_hint, api_key_hint):
 		error_msg += (
 			f" The configured model {model!r} is unavailable from this server; "
 			f"load it there or set {model_hint} to a model the endpoint exposes."
+		)
+	if _is_missing_backend_ffmpeg(error_msg):
+		service = "transcription server" if default == "Transcription failed" else "AI server"
+		error_msg += (
+			f" The {service} process cannot find ffmpeg. If ffmpeg is already "
+			"installed, add its bin directory to that process's service PATH; "
+			"macOS GUI apps do not inherit your shell PATH."
 		)
 	if resp.status_code in (401, 403) and api_key_hint:
 		error_msg += f" (set {api_key_hint})"

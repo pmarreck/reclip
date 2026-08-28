@@ -12,7 +12,7 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 
 ### Original
 - Download videos from 1000+ supported sites (via [yt-dlp](https://github.com/yt-dlp/yt-dlp))
-- MP4 video or MP3 audio extraction
+- MP4 video or 192 kbps CBR MP3 audio extraction
 - Quality/resolution picker
 - Bulk downloads — paste multiple URLs at once
 - Automatic URL deduplication
@@ -39,7 +39,7 @@ A self-hosted, open-source video, audio, and image downloader with a clean web U
 - **Independently configurable backends** — separate URL, model, and API key for STT, summarization, translation, counterargument, and TTS; prompts live in `actions.json`
 - **Service-safe secrets** — `~/.config/reclip+/secrets.ini` (0600, hot-reloaded) supplies API keys to the launchd/systemd service, which never sees your shell env
 - **Whisper accuracy helpers** — the video's own title/description seeds Whisper's decoder so proper nouns transcribe correctly (`RECLIP_STT_METADATA_PROMPT`), and word timestamps are requested for diarization alignment (`RECLIP_STT_WORD_TIMESTAMPS`)
-- **300+ tests** — config, cache, LLM client, diarizer, speaker pipeline, actions registry, media extractor, service, and API integration tests
+- **380+ tests** — config, cache, LLM client, diarizer, speaker pipeline, actions registry, media extractor, service, and API integration tests
 
 ## Quick Start
 
@@ -86,6 +86,21 @@ reports the attempted model plus the exact `RECLIP_*_MODEL` setting to change.
 When it cannot connect, it reports the endpoint and its `RECLIP_*_URL` setting.
 Use the oMLX admin dashboard or `GET /v1/models` to verify the model name
 before changing ReClip's config.
+
+If transcription reports `ffmpeg not found` even though ReClip's Nix shell has
+ffmpeg, the message is coming from the separate STT server process. macOS GUI
+apps launched at login do not inherit your shell PATH. Quit oMLX and start its
+executable from a shell where `command -v ffmpeg` succeeds:
+
+```bash
+/Applications/oMLX.app/Contents/MacOS/oMLX
+```
+
+For persistent launch-at-login use, configure oMLX's LaunchAgent to execute
+that binary directly with an `EnvironmentVariables` PATH containing the stable
+package-manager bin directory (for Nix, `/run/current-system/sw/bin`; for Apple
+Silicon Homebrew, `/opt/homebrew/bin`). Do not pin a changing `/nix/store/...`
+path. ReClip also appends this process-PATH guidance to backend ffmpeg errors.
 
 ### CLI
 
@@ -285,7 +300,7 @@ stays loopback-gated, but that does not make the media API multi-user safe.
 ## Usage
 
 1. Paste one or more video URLs into the input box
-2. Choose **MP4** (video) or **MP3** (audio)
+2. Choose **Video** or **Audio**. Audio downloads are 192 kbps CBR MP3.
 3. Click **Fetch** to load video info and thumbnails
 4. Select quality/resolution if available
 5. Click **Download**, **Transcribe**, **Diarize**, or an action such as **Summarize**. Text actions use a cached diarized transcript when present, but never trigger diarization on their own.
@@ -294,7 +309,12 @@ stays loopback-gated, but that does not make the media API multi-user safe.
 
 ## Cache
 
-The cache stores downloaded audio, video, transcripts, summaries, and translations keyed by normalized URL (tracking parameters stripped). Repeated operations on the same URL are instant.
+The cache stores downloaded audio, video, transcripts, summaries, and
+translations keyed by normalized URL (tracking parameters stripped). Repeated
+operations on the same URL are instant and the Download button serves existing
+media without contacting the source platform again. ReClip retains the original
+M4A audio for transcription and stores the user-facing compatibility file
+separately as `audio-192k.mp3`.
 
 Use the cache controls in the loopback web UI to pin, delete, or clear cached
 entries. `./bin/reclip cache` reports the shared cache location and usage.
@@ -304,6 +324,7 @@ When accessed from localhost, the web UI footer shows cache stats and configured
 ## Testing
 
 ```bash
+./build          # build the packaged app through Nix
 ./test           # runs the full hermetic suite via Nix + pytest
 ./test -k cache  # run only cache tests
 ```

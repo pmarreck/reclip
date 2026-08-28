@@ -29,6 +29,18 @@ def _friendly_error_source(template):
 	return template[start:end]
 
 
+def _card_format_source(template):
+	start = template.index("    function cardFormat(c) {")
+	end = template.index("\n    function renderCard", start)
+	return template[start:end]
+
+
+def _download_card_source(template):
+	start = template.index("    async function dlCard(idx) {")
+	end = template.index("\n    function pollCard", start)
+	return template[start:end]
+
+
 def test_copy_action_has_clipboard_fallback_for_firefox():
 	template = TEMPLATE_PATH.read_text()
 	assert "async function copyToClipboard(text)" in template
@@ -54,6 +66,14 @@ def test_media_type_toggle_uses_intent_labels():
 	template = TEMPLATE_PATH.read_text()
 	assert 'data-format="video" onclick="setFormat(this)">Video</button>' in template
 	assert 'data-format="audio" onclick="setFormat(this)">Audio</button>' in template
+
+
+def test_audio_only_cached_card_keeps_audio_format_after_reload():
+	template = TEMPLATE_PATH.read_text()
+	source = _card_format_source(template)
+	assert "if (ce.has_audio && !ce.has_video) return 'audio';" in source
+	assert "if (ce.has_video && !ce.has_audio) return 'video';" in source
+	assert "format: cardFormat(c)" in _download_card_source(template)
 
 
 def test_diarize_operation_uses_its_user_facing_label():

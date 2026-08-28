@@ -202,6 +202,24 @@ class TestListEntries:
 		assert e["has_translation"] is False
 		assert e["has_counterargue"] is False
 
+	def test_media_flags_classify_a_mixed_entry_set(self, tmp_cache):
+		from cache import Cache
+		c = Cache(str(tmp_cache), max_mb=10)
+		cases = [
+			("https://example.com/internal-audio", "audio.m4a", True, False),
+			("https://example.com/download-audio", "audio-192k.mp3", True, False),
+			("https://example.com/video", "video.mp4", False, True),
+			("https://example.com/text", "transcript.txt", False, False),
+		]
+		for url, filename, _, _ in cases:
+			c.write_text(url, filename, "x", meta={"url": url})
+
+		entries = {entry["url"]: entry for entry in c.list_entries()}
+		assert [
+			(entries[url]["has_audio"], entries[url]["has_video"])
+			for url, _, _, _ in cases
+		] == [(has_audio, has_video) for _, _, has_audio, has_video in cases]
+
 	def test_entry_includes_pinned_flag(self, tmp_cache):
 		from cache import Cache
 		c = Cache(str(tmp_cache), max_mb=10)

@@ -737,6 +737,14 @@
       btn.textContent = 'Fetch';
     }
 
+    function cardFormat(c) {
+      const ce = c.cacheEntry;
+      if (!ce) return currentFormat;
+      if (ce.has_audio && !ce.has_video) return 'audio';
+      if (ce.has_video && !ce.has_audio) return 'video';
+      return currentFormat;
+    }
+
     function renderCard(idx) {
       const c = cardData[idx];
       if (!c) return;  // entry may have been deleted
@@ -819,7 +827,7 @@
 
       // Ready / downloading / done / error states
       el.className = 'card';
-      const isAudio = currentFormat === 'audio';
+      const isAudio = cardFormat(c) === 'audio';
 
       let thumbHtml;
       if (isAudio) {
@@ -1120,7 +1128,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url: c.url,
-            format: currentFormat,
+            format: cardFormat(c),
             format_id: c.selectedFormatId,
             title: c.title || '',
           }),
