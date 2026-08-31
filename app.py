@@ -157,6 +157,12 @@ AUDIO_DOWNLOAD_CACHE_FILENAME = "audio-192k.mp3"
 AUDIO_CACHE_FILENAMES = ("audio.m4a", "audio.mp3", AUDIO_DOWNLOAD_CACHE_FILENAME)
 AUDIO_PROBE_TIMEOUT_SECONDS = 10
 AUDIO_EXTRACTION_TIMEOUT_SECONDS = 600
+MIN_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = 30 * 60
+MAX_SUPPORTED_MEDIA_DURATION_SECONDS = 6 * 60 * 60
+MEDIA_DOWNLOAD_TIMEOUT_MULTIPLIER = 3
+UNKNOWN_MEDIA_DOWNLOAD_TIMEOUT_SECONDS = (
+    MAX_SUPPORTED_MEDIA_DURATION_SECONDS * MEDIA_DOWNLOAD_TIMEOUT_MULTIPLIER
+)
 M4A_COPY_CODEC_PREFIXES = ("aac", "mp4a")
 M4A_COPY_CODECS = frozenset({"alac"})
 VIDEO_EXTENSIONS = frozenset({"3gp", "flv", "m4v", "mkv", "mov", "mp4", "webm"})
@@ -181,6 +187,40 @@ def _last_stderr_line(result):
     if not text:
         return "Command failed"
     return text.split("\n")[-1]
+
+
+def _media_download_timeout(duration):
+    """Bound a yt-dlp payload without confusing runtime with media length.
+
+    yt-dlp's socket timeout and retries handle stalled network requests. This
+    much looser outer deadline catches a wedged process or postprocessor while
+    allowing downloads to average one third of playback speed. Durations above
+    the supported six-hour envelope are clamped only for deadline calculation;
+    they are not rejected.
+    """
+    try:
+        seconds = float(duration)
+    except (TypeError, ValueError):
+        return UNKNOWN_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+    if seconds <= 0 or seconds != seconds:
+        return UNKNOWN_MEDIA_DOWNLOAD_TIMEOUT_SECONDS
+    bounded_duration = min(seconds, MAX_SUPPORTED_MEDIA_DURATION_SECONDS)
+    return max(
+        MIN_MEDIA_DOWNLOAD_TIMEOUT_SECONDS,
+        int(bounded_duration * MEDIA_DOWNLOAD_TIMEOUT_MULTIPLIER),
+    )
+
+
+def _run_media_download(cmd, duration):
+    """Run one yt-dlp payload transfer with a duration-aware final backstop."""
+    timeout = _media_download_timeout(duration)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"Media download exceeded its {_format_duration(timeout)} safety "
+            "backstop"
+        ) from e
 
 
 def _source_files_for_template(out_template):
@@ -424,7 +464,8 @@ def _create_compatibility_mp3(source_path, target_path):
     return target_path
 
 
-def _download_audio_from_video_source(url, source_template, audio_path):
+def _download_audio_from_video_source(
+        url, source_template, audio_path, media_duration=None):
     """Create an audio artifact from a small progressive video source.
 
     Direct audio and adaptive downloads can receive YouTube 403 responses.
@@ -446,7 +487,7 @@ def _download_audio_from_video_source(url, source_template, audio_path):
                 *_youtube_audio_extractor_args(url),
                 "-f", source_format, "--merge-output-format", "mp4", "-o", source_template, url,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = _run_media_download(cmd, media_duration)
             if result.returncode == 0:
                 break
             last_error = _last_stderr_line(result)
@@ -488,10 +529,11 @@ def _ensure_audio(url):
     if existing:
         return existing
     # Fetch metadata before downloading (cheap, and useful later)
-    _fetch_and_cache_metadata(url)
+    meta = _fetch_and_cache_metadata(url)
     audio_path = cache.entry_path(url, "audio.m4a")
     return _download_audio_from_video_source(
-        url, cache.entry_path(url, "audio_source.%(ext)s"), audio_path
+        url, cache.entry_path(url, "audio_source.%(ext)s"), audio_path,
+        media_duration=meta.get("duration"),
     )
 
 
@@ -728,7 +770,8 @@ def run_download(job_id, url, format_choice, format_id):
                 # cleanup must never match the final user-facing MP3.
                 source_template = os.path.join(DOWNLOAD_DIR, f"{job_id}.source.%(ext)s")
                 internal_audio = _download_audio_from_video_source(
-                    url, source_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.m4a")
+                    url, source_template, os.path.join(DOWNLOAD_DIR, f"{job_id}.m4a"),
+                    media_duration=cache.read_meta(url).get("duration"),
                 )
                 try:
                     internal_name = (
@@ -754,7 +797,9 @@ def run_download(job_id, url, format_choice, format_id):
                 cmd += ["-f", VIDEO_DOWNLOAD_FORMAT, "--merge-output-format", "mp4"]
             cmd.append(url)
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = _run_media_download(
+                cmd, cache.read_meta(url).get("duration")
+            )
             if result.returncode != 0:
                 job["status"] = "error"
                 job["error"] = _last_stderr_line(result)
@@ -798,9 +843,6 @@ def run_download(job_id, url, format_choice, format_id):
             })
         except Exception:
             pass  # Cache failure must not break the download
-    except subprocess.TimeoutExpired:
-        job["status"] = "error"
-        job["error"] = "Download timed out (5 min limit)"
     except Exception as e:
         job["status"] = "error"
         job["error"] = str(e)

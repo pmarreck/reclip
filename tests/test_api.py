@@ -169,6 +169,23 @@ class TestCheckStatusExtendedFields:
 
 
 class TestTranscribeEndpoint:
+    def test_media_download_timeout_policy_covers_duration_classes(self):
+        import app
+
+        cases = (
+            (60, 30 * 60),
+            (3600, 3 * 3600),
+            (6 * 3600, 18 * 3600),
+            (8 * 3600, 18 * 3600),
+            (None, 18 * 3600),
+            (0, 18 * 3600),
+            ("invalid", 18 * 3600),
+        )
+
+        assert [
+            app._media_download_timeout(duration) for duration, _expected in cases
+        ] == [expected for _duration, expected in cases]
+
     @responses.activate
     def test_transcribe_cached_returns_immediately(self, client, tmp_cache):
         import app
@@ -233,6 +250,40 @@ class TestTranscribeEndpoint:
             ffmpeg_cmd.index("-c:a"):ffmpeg_cmd.index("-c:a") + 2
         ]
         assert ffmpeg_cmd[-2] == app.cache.entry_path(url, "audio.partial.m4a")
+
+    def test_ensure_audio_download_deadline_is_three_times_media_duration(
+            self, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=onehourinterview"
+        download_timeouts = []
+        monkeypatch.setattr(
+            app, "_fetch_and_cache_metadata", lambda _url: {"duration": 3600}
+        )
+
+        def mock_run(cmd, *args, **kwargs):
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+
+            if cmd[0] == "yt-dlp" and "--simulate" in cmd:
+                R.stdout = json.dumps({"acodec": "mp4a.40.2"})
+            elif cmd[0] == "yt-dlp":
+                download_timeouts.append(kwargs.get("timeout"))
+                source_path = app.cache.entry_path(url, "audio_source.mp4")
+                with open(source_path, "wb") as f:
+                    f.write(b"one-hour source")
+            elif cmd[0] == "ffmpeg":
+                with open(cmd[-2], "wb") as f:
+                    f.write(b"remuxed audio")
+            return R()
+
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        app._ensure_audio(url)
+
+        assert download_timeouts == [3 * 3600]
 
     def test_ensure_audio_inspects_codec_metadata_before_transfer(self, tmp_cache, monkeypatch):
         import app
@@ -880,6 +931,31 @@ class TestDownloadCaching:
 
         assert app.jobs[job_id]["status"] == "done"
         assert app.cache.has_file(url, "video.mp4"), "video.mp4 should be cached after video download"
+
+    def test_video_payload_uses_duration_aware_download_deadline(
+            self, client, tmp_cache, monkeypatch):
+        import app
+
+        url = "https://youtube.com/watch?v=longvideo"
+        job_id = "longvideo1"
+        app.jobs[job_id] = {
+            "status": "downloading", "url": url, "title": "Long Video",
+        }
+        app.cache._write_meta(url, {"url": url, "title": "Long Video", "duration": 3600})
+        payload_timeouts = []
+        fake_run = self._make_mock_run(job_id, app.DOWNLOAD_DIR)
+
+        def recording_run(cmd, *args, **kwargs):
+            if cmd[0] == "yt-dlp" and "--simulate" not in cmd:
+                payload_timeouts.append(kwargs.get("timeout"))
+            return fake_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", recording_run)
+
+        app.run_download(job_id, url, "video", None)
+
+        assert app.jobs[job_id]["status"] == "done"
+        assert payload_timeouts == [3 * 3600]
 
     def test_redgifs_video_download_falls_back_when_codecs_are_unknown(
             self, client, tmp_cache, monkeypatch):

@@ -6,6 +6,19 @@ maintained_by: agent
 
 # PLAN
 
+## Completed: Duration-aware media download deadline (2026-08-30)
+- [x] Replace the five-minute yt-dlp payload deadline with a last-resort
+      backstop equal to three times the reported media duration, retaining a
+      sensible floor and a fallback derived from the six-hour support target.
+      Curiosity poke: missing, invalid, or misleading duration metadata must
+      remain bounded without shortening the deadline for supported long-form
+      media; yt-dlp's own socket timeout and retries remain the first line of
+      defense against network stalls.
+      Completed 2026-08-30 22:31 EDT: payload downloads now use a 30-minute
+      minimum, three times known duration, and an 18-hour ceiling/fallback.
+      The reported 51:11 interview receives 2:33:33. Full suite: 391 passed;
+      `nix build` passed.
+
 ## Completed: Restore oMLX ffmpeg access (2026-08-27)
 - [x] Configure oMLX's user LaunchAgent to execute the app directly with the
       stable Nix system profile on PATH. Completed 2026-08-27 12:16 EDT.
